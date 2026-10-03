@@ -1,0 +1,3 @@
+import Link from "next/link";
+import { signOut } from "@/app/auth/actions";
+export default function PendingAccess(){return <main className="auth-shell"><section className="auth-main"><div className="auth-card"><span className="eyebrow">Banco Académico</span><h1>Acceso pendiente</h1><p className="muted">Tu cuenta todavía no tiene un perfil académico asignado. Contacta a la administración de tu institución.</p><form action={signOut}><button className="button" type="submit">Cerrar sesión</button></form><p className="auth-bottom"><Link className="text-link" href="/">Volver al inicio</Link></p></div></section></main>}
