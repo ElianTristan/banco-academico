@@ -1,2 +1,6 @@
 import { Portal } from "@/components/portal";
-export default async function StudentLayout({children}:{children:React.ReactNode}){return children ?? <Portal role="alumno"/>}
+import { PageTransition } from "@/components/page-transition";
+
+export default async function StudentLayout({ children }: { children: React.ReactNode }) {
+  return <PageTransition className="app-shell-page">{children ?? <Portal role="alumno" />}</PageTransition>;
+}
