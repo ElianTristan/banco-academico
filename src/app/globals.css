@@ -4,7 +4,8 @@
 *{box-sizing:border-box}html{min-height:100%;background:var(--paper)}body{margin:0;color:var(--ink);font-family:Arial,Helvetica,sans-serif;-webkit-font-smoothing:antialiased}button,input{font:inherit}button,a{-webkit-tap-highlight-color:transparent}a{color:inherit;text-decoration:none}::selection{background:#cce7d9}
 .motion-shell{opacity:0;animation:route-enter var(--motion-page) var(--motion-ease) forwards;transform-origin:center;will-change:transform,opacity}
 .auth-page-shell,.app-shell-page{display:block}
-.auth-card,.auth-side,.auth-main,.app-shell,.main,.sidebar,.panel,.stat,.portal-focus-card,.field,.button,.auth-role-option,.auth-attempts,.form-error,.form-success,.nav-item,.admin-workspace-nav,.role-quick-actions a,.notice,.admin-person-row,.material-row,.advisory-row,.latest-item{animation:surface-enter var(--motion-base) var(--motion-ease) both}
+.auth-card,.auth-side,.auth-main,.app-shell,.main,.sidebar,.panel,.stat,.portal-focus-card,.field,.button,.auth-role-option,.auth-attempts,.form-error,.form-success,.nav-item,.nav-group,.admin-workspace-nav,.role-quick-actions a,.notice,.admin-person-row,.material-row,.advisory-row,.latest-item,.profile-mini,.signout{animation:surface-enter var(--motion-base) var(--motion-ease) both}
+.nav-item:nth-child(2n){animation-delay:25ms}.nav-item:nth-child(3n){animation-delay:50ms}.nav-item:nth-child(4n){animation-delay:75ms}.portal-focus-card:nth-child(2){animation-delay:35ms}.portal-focus-card:nth-child(3){animation-delay:70ms}.stat:nth-child(2){animation-delay:22ms}.stat:nth-child(3){animation-delay:44ms}.stat:nth-child(4){animation-delay:66ms}.notice:nth-child(2){animation-delay:35ms}.notice:nth-child(3){animation-delay:70ms}.admin-person-row:nth-child(2){animation-delay:20ms}.admin-person-row:nth-child(3){animation-delay:40ms}
 @media (prefers-reduced-motion: reduce){
   .motion-shell,
   .auth-card,
