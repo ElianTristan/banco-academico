@@ -16,6 +16,29 @@ async function actor() {
   return { supabase, user, role: data?.role as string | null };
 }
 
+export async function searchAdminDirectory(query: string) {
+  const term = query.replace(/[^\p{L}\p{N}@.-]/gu, " ").trim().slice(0, 80);
+  if (term.length < 2) return { ok: true as const, items: [] as { title: string; detail: string; href: string; kind: string }[] };
+  const { supabase, user, role } = await actor();
+  if (!user || role !== "administrador") return { ok: false as const, items: [] as { title: string; detail: string; href: string; kind: string }[] };
+  const pattern = `%${term}%`;
+  const [profiles, students, teachers, subjects, groups] = await Promise.all([
+    supabase.from("profiles").select("id,first_name,last_name,email,role").or(`first_name.ilike.${pattern},last_name.ilike.${pattern},email.ilike.${pattern}`).limit(6),
+    supabase.from("students").select("id,control_number").ilike("control_number", pattern).limit(4),
+    supabase.from("teachers").select("id,employee_number").ilike("employee_number", pattern).limit(4),
+    supabase.from("subjects").select("id,name,code").or(`name.ilike.${pattern},code.ilike.${pattern}`).limit(5),
+    supabase.from("groups").select("id,code,subject_id").ilike("code", pattern).limit(5),
+  ]);
+  const items = [
+    ...(profiles.data ?? []).map(item => ({ title: [item.first_name,item.last_name].filter(Boolean).join(" ") || item.email, detail: `${item.email} · ${item.role}`, href: `/admin/usuarios?q=${encodeURIComponent(term)}`, kind: "Usuario" })),
+    ...(students.data ?? []).map(item => ({ title: item.control_number || "Alumno", detail: "Número de control", href: `/admin/alumnos?q=${encodeURIComponent(term)}`, kind: "Alumno" })),
+    ...(teachers.data ?? []).map(item => ({ title: item.employee_number || "Docente", detail: "Número de trabajador", href: `/admin/docentes?q=${encodeURIComponent(term)}`, kind: "Docente" })),
+    ...(subjects.data ?? []).map(item => ({ title: item.name, detail: item.code, href: `/admin/materias?q=${encodeURIComponent(term)}`, kind: "Materia" })),
+    ...(groups.data ?? []).map(item => ({ title: item.code, detail: "Grupo académico", href: `/admin/grupos?q=${encodeURIComponent(term)}`, kind: "Grupo" })),
+  ];
+  return { ok: true as const, items };
+}
+
 export async function saveProfile(formData: FormData): Promise<ActionResult> {
   const parsed = z.object({
     firstName: z.string().trim().min(1).max(80),

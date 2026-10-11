@@ -10,5 +10,5 @@ export async function AdvisorySection({role,userId}:{role:AppRole;userId:string}
     supabase.from("subjects").select("id,name,code").eq("active",true).order("name"),
     role==="alumno"?supabase.from("advisory_reservations").select("session_id").eq("student_id",userId).eq("status","Reservada"):Promise.resolve({data:[],error:null}),
   ]);
-  return <AdvisoryWorkspace sessions={sessionsResult.data??[]} subjects={subjectsResult.data??[]} reservedIds={(reservationsResult.data??[]).map(item=>item.session_id)} role={role}/>;
+  return <AdvisoryWorkspace sessions={sessionsResult.data??[]} subjects={subjectsResult.data??[]} reservedIds={(reservationsResult.data??[]).map(item=>item.session_id)} role={role} loadError={sessionsResult.error?"No pudimos cargar las asesorías académicas.":null}/>;
 }

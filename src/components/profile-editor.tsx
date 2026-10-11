@@ -3,7 +3,7 @@
 import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
-import { Camera, Moon, Sun, UserRound } from "lucide-react";
+import { Camera, Moon, Sun } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { saveProfile } from "@/app/academic/actions";
 
@@ -23,6 +23,7 @@ export function ProfileEditor(props: Props) {
   const [busy, startTransition] = useTransition();
   const fileInput = useRef<HTMLInputElement>(null);
   const router = useRouter();
+  const initials = `${props.firstName.trim().charAt(0)}${props.lastName.trim().charAt(0)}`.toLocaleUpperCase() || "BA";
 
   async function uploadPhoto(file?: File) {
     if (!file) return;
@@ -59,7 +60,7 @@ export function ProfileEditor(props: Props) {
   return <section className="panel profile-editor mx-auto w-full max-w-5xl overflow-hidden p-0">
     <div className="profile-cover flex items-center gap-5 px-5 py-7 sm:px-10 sm:py-9">
       <div className="profile-photo-wrap">
-        {preview ? <Image className="profile-photo" src={preview} width={82} height={82} unoptimized alt="Foto de perfil"/> : <span className="profile-photo placeholder"><UserRound size={30}/></span>}
+        {preview ? <Image className="profile-photo" src={preview} width={82} height={82} unoptimized alt="Foto de perfil"/> : <span className="profile-photo profile-photo-initials" aria-label={`Avatar de ${props.firstName} ${props.lastName}`}>{initials}</span>}
         <button className="photo-button" type="button" onClick={() => fileInput.current?.click()} aria-label="Cambiar fotografía"><Camera size={16}/></button>
         <input ref={fileInput} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={event => uploadPhoto(event.target.files?.[0])}/>
       </div>
