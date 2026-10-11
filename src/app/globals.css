@@ -772,3 +772,36 @@ html{-webkit-text-size-adjust:100%}
 .app-shell[data-theme="dark"] .admin-role-badge{border-color:#405572;background:#1b2d47;color:#d5e0ef}
 @media(max-width:600px){.admin-directory-search>div{flex-wrap:wrap}.admin-person-row{grid-template-columns:38px minmax(0,1fr);gap:5px 10px;padding:12px 5px}.admin-person-avatar{grid-row:1/3}.admin-person-identity{grid-column:2}.admin-role-badge{grid-column:2;margin-top:2px}.admin-person-row time{grid-column:2;justify-self:start}}
 @media(hover:none){.admin-person-row:hover{background:transparent}}
+
+.registration-choice,.registration-guidance{width:min(100%,520px);margin-inline:auto}
+.registration-choice .auth-form-head,.registration-guidance .auth-form-head{margin-bottom:22px}
+.registration-role-list{display:grid;border-top:1px solid #dce4ef}
+.registration-role{display:flex;align-items:center;gap:13px;min-height:82px;padding:13px 8px;border-bottom:1px solid #dce4ef;color:#142742;text-decoration:none;transition:background 180ms var(--ease-standard),color 180ms var(--ease-standard)}
+.registration-role:hover{background:#f7f9fc;color:#183b70}
+.registration-role:focus-visible{outline:2px solid #5278a9;outline-offset:2px}
+.registration-role-icon{display:grid;flex:none;place-items:center;width:38px;height:38px;border:1px solid #dce4ef;border-radius:12px;background:#f2f5fa;color:#183b70}
+.registration-role-copy{display:grid;flex:1;gap:4px;min-width:0}
+.registration-role-copy strong{font-size:13px;font-weight:700}
+.registration-role-copy small{color:#617189;font-size:11px;line-height:1.45}
+.registration-role-action{flex:none;color:#183b70;font-size:11px;font-weight:650}
+.registration-role-restricted{color:#52627a}
+.registration-role-restricted .registration-role-action{color:#7d5260;font-size:10px}
+.registration-security-note{margin:19px 0 0;padding:12px 13px;border:1px solid #dce4ef;border-radius:11px;background:#f7f9fc;color:#52627a;font-size:11px;line-height:1.55}
+.registration-guidance-actions{display:grid;justify-items:start;gap:15px;margin-top:20px}
+.registration-guidance-actions .button{display:grid;place-items:center;width:100%;text-decoration:none}
+.registration-guidance-actions .text-link{font-size:12px}
+.auth-attempt-message{min-height:46px}
+.recovery-complete{display:flex;align-items:flex-start;gap:12px;padding:16px;margin-bottom:18px;color:#225b47}
+.recovery-complete svg{flex:none;margin-top:2px}
+.recovery-complete h1{margin:0 0 5px;font-size:20px}
+.recovery-complete p{margin:0;font-size:13px}
+.recovery-login-link{display:grid;place-items:center;text-decoration:none}
+.portal-login-success{margin:16px 0 0}
+.app-shell[data-theme="dark"] .registration-role-list,.app-shell[data-theme="dark"] .registration-role{border-color:#405572}
+.app-shell[data-theme="dark"] .registration-role{color:#edf3fb}
+.app-shell[data-theme="dark"] .registration-role:hover{background:#1b2d47}
+.app-shell[data-theme="dark"] .registration-role-icon{border-color:#405572;background:#1b2d47;color:#d5e0ef}
+.app-shell[data-theme="dark"] .registration-role-copy small,.app-shell[data-theme="dark"] .registration-security-note{color:#bac8da}
+.app-shell[data-theme="dark"] .registration-security-note{border-color:#405572;background:#1b2d47}
+@media(max-width:600px){.registration-role{min-height:76px;gap:10px;padding:12px 5px}.registration-role-icon{width:35px;height:35px}.registration-role-action{max-width:70px;text-align:right}}
+@media(prefers-reduced-motion:reduce){.registration-role{transition:none}.auth-attempt-message{animation:none}}

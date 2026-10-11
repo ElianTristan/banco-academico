@@ -28,7 +28,7 @@ npm run preview
 
 ## Autenticación y roles
 
-- El registro público crea cuentas de **alumno**. No permite elegir roles privilegiados.
+- El registro público permite elegir Estudiante, Docente o Administrador para ver el proceso aplicable, pero solo crea cuentas de **alumno**. El acceso docente requiere revisión y el administrador no se puede registrar públicamente.
 - Un alumno solicita acceso docente desde su perfil. Un administrador valida la solicitud y puede aprobarla desde `/admin/solicitudes`.
 - La primera cuenta administradora se aprovisiona desde el SQL Editor de Supabase siguiendo [docs/SEGURIDAD_Y_ROLES.md](docs/SEGURIDAD_Y_ROLES.md). No uses una clave `service_role` desde el navegador.
 - `middleware.ts`, los layouts de servidor, las Server Actions, los RPC y las políticas RLS aplican controles en sus respectivas capas. La interfaz por sí sola no concede permisos.
@@ -38,15 +38,15 @@ Para probar los tres espacios, crea cuentas separadas desde el registro para alu
 
 ## Base de datos
 
-Para una base existente, aplica solo `supabase/migrations/0005_server_login_identifier_lookup.sql` como migración incremental; no vuelvas a ejecutar el SQL consolidado sobre una base ya instalada. Para una instalación nueva, usa `supabase/BANCO_ACADEMICO_MIGRACION_COMPLETA.sql`, que incluye las cinco migraciones en orden. Las fuentes incrementales están en `supabase/migrations/`. Haz un respaldo de Supabase antes de cambios de esquema y no mezcles migraciones parciales.
+Para una base existente, haz un respaldo y aplica en orden `supabase/migrations/0005_server_login_identifier_lookup.sql` y `supabase/migrations/0006_server_auth_attempts.sql` como migraciones incrementales; no vuelvas a ejecutar el SQL consolidado sobre una base ya instalada. La última migración añade límites temporales por identificador y dirección de origen, y registra los eventos de autenticación mediante funciones solo disponibles para `service_role`. Usa `extensions.digest` para que la función de hash coincida con el esquema donde Supabase instaló `pgcrypto`. Para una instalación nueva, usa `supabase/BANCO_ACADEMICO_MIGRACION_COMPLETA.sql`, que incluye las seis migraciones en orden. Las fuentes incrementales están en `supabase/migrations/`.
 
 ## Deployment en Vercel
 
 El proyecto usa Next.js y puede desplegarse en Vercel con el preset detectado automáticamente:
 
 1. Importa el repositorio en Vercel y conserva los comandos predeterminados de Next.js (`npm run build` y salida administrada por Next).
-2. Configura `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` y `NEXT_PUBLIC_SITE_URL` en los entornos Preview y Production. Para habilitar el acceso por identificador institucional, configura también `SUPABASE_SERVICE_ROLE_KEY` como variable privada de servidor en ambos entornos. Nunca la expongas al frontend ni uses un prefijo `NEXT_PUBLIC_`.
-3. En Supabase Auth, configura las URL de sitio y redirección para el dominio desplegado, incluyendo `/auth/callback` y `/recuperar/nueva`; conserva también las URL locales necesarias para desarrollo.
+2. Configura `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` y `NEXT_PUBLIC_SITE_URL` en los entornos Preview y Production. `NEXT_PUBLIC_SITE_URL` debe ser el origen HTTPS real del deployment correspondiente, nunca `localhost` en Production. Configura `SUPABASE_SERVICE_ROLE_KEY` como variable privada de servidor en ambos entornos si habilitas el acceso por identificador institucional y el límite de intentos; nunca la expongas al frontend ni uses un prefijo `NEXT_PUBLIC_`.
+3. En Supabase Auth, define **Site URL** al origen de producción real y permite como **Redirect URL** la ruta exacta `${NEXT_PUBLIC_SITE_URL}/auth/callback` (y los orígenes/rutas locales necesarios para desarrollo). Los enlaces de recuperación y confirmación pasan por ese callback; la aplicación continúa a `/recuperar/nueva` o al inicio según el flujo. No agregues un dominio de producción hasta confirmar cuál usa el proyecto.
 4. Despliega y prueba registro, confirmación de correo, login, recuperación, salida y redirección por rol. Comprueba con cuentas separadas que las rutas ajenas redirigen y que RLS mantiene los datos restringidos.
 
 No hay un deployment ni una URL remota configurados o verificados desde este workspace. `NEXT_PUBLIC_SITE_URL` debe coincidir con el host activo en cada entorno.

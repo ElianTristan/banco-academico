@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useFormStatus } from "react-dom";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
@@ -13,12 +13,17 @@ type AppRole = "alumno" | "docente" | "administrador";
 type PasswordCheck = { label: string; valid: boolean };
 
 const messages: Record<string, string> = {
-  datos: "Revisa los campos. La contraseña debe tener al menos 10 caracteres, mayúscula, minúscula y número.",
-  credenciales: "No pudimos iniciar sesión. Verifica tus datos e intenta de nuevo.",
+  datos: "Revisa los datos ingresados e inténtalo de nuevo.",
+  correo: "Escribe una dirección de correo válida.",
+  auth: "El acceso no está disponible en este momento. Inténtalo de nuevo más tarde.",
+  ocupado: "Hay un intento de acceso en proceso. Espera un momento y vuelve a intentarlo.",
   lookup: "No pudimos validar el acceso en este momento. Intenta con tu correo o vuelve a intentarlo más tarde.",
+  rol: "El rol seleccionado no coincide con tu cuenta. Selecciona el rol autorizado para este perfil.",
   registro: "No pudimos crear la cuenta. Verifica los datos o intenta iniciar sesión.",
   existente: "Este correo ya tiene una cuenta. Intenta iniciar sesión o recuperar tu contraseña.",
+  configuracion: "El servicio de autenticación no está configurado para este entorno. Contacta al administrador.",
   enlace: "El enlace no es válido o venció. Solicita uno nuevo.",
+  recuperacion: "No pudimos iniciar la recuperación en este momento. Inténtalo más tarde.",
   actualizar: "No pudimos actualizar la contraseña. Solicita un enlace nuevo.",
 };
 
@@ -30,10 +35,11 @@ const roles: { value: AppRole; label: string; hint: string }[] = [
 
 function getPasswordChecks(password: string): PasswordCheck[] {
   return [
-    { label: "10 caracteres", valid: password.length >= 10 },
+    { label: "8 caracteres", valid: password.length >= 8 },
     { label: "Mayúscula", valid: /[A-Z]/.test(password) },
     { label: "Minúscula", valid: /[a-z]/.test(password) },
     { label: "Número", valid: /\d/.test(password) },
+    { label: "Carácter especial", valid: /[^\p{L}\p{N}]/u.test(password) },
   ];
 }
 
@@ -41,42 +47,25 @@ export function AuthForm({ mode }: { mode: Mode }) {
   const params = useSearchParams();
   const [show, setShow] = useState(false);
   const [selectedRole, setSelectedRole] = useState<AppRole>("alumno");
-  const [attemptCount, setAttemptCount] = useState(0);
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const error = params.get("error");
   const action = mode === "login" ? signIn : mode === "register" ? signUp : mode === "reset" ? requestPasswordReset : updatePassword;
   const title = { login: "Inicia sesión", register: "Crea tu cuenta", reset: "Recupera tu cuenta", "new-password": "Crea una contraseña nueva" }[mode];
-
-  useEffect(() => {
-    try {
-      const stored = Number(window.sessionStorage.getItem("bank-academico-attempts") ?? "0");
-      setAttemptCount(Number.isFinite(stored) ? stored : 0);
-    } catch {
-      setAttemptCount(0);
-    }
-  }, [error]);
-
-  function handleSubmit() {
-    if (mode !== "login") return;
-    const nextCount = attemptCount + 1;
-    setAttemptCount(nextCount);
-    try {
-      window.sessionStorage.setItem("bank-academico-attempts", String(nextCount));
-    } catch {
-      // session storage may be unavailable; ignore silently
-    }
-  }
-
+  const attempt = Number(params.get("attempt"));
+  const failedAttempt = mode === "login" && error === "credenciales" && Number.isInteger(attempt) && attempt >= 1 && attempt <= 2;
   const passwordChecks = getPasswordChecks(password);
   const isPasswordSecure = passwordChecks.every((check) => check.valid);
 
-  return <form action={action} onSubmit={handleSubmit} className="auth-form motion-form">
+  return <form action={action} className="auth-form motion-form">
     <div className="auth-form-head"><span className="eyebrow">Banco Académico</span><h1>{title}</h1><p className="muted">{mode === "login" ? "Accede a tu espacio académico." : mode === "register" ? "Regístrate para consultar tu información académica." : mode === "reset" ? "Te enviaremos un enlace a tu correo." : "Elige una contraseña segura para continuar."}</p></div>
-    {error && <p className="form-error" role="alert">{messages[error] ?? "Ocurrió un problema. Inténtalo de nuevo."}</p>}
-    {params.get("success") && <p className="form-success" role="status">Cuenta creada. Revisa tu correo para confirmar la dirección antes de iniciar sesión.</p>}
+    {failedAttempt
+      ? <p className="form-error auth-attempt-message" role="alert">Intento {attempt} de 3. Verifica tu correo y contraseña.</p>
+      : error && <p className="form-error" role="alert">{messages[error] ?? "Ocurrió un problema. Inténtalo de nuevo."}</p>}
+    {mode === "reset" && params.get("blocked") === "1" && <p className="form-error auth-attempt-message" role="alert">Intento 3 de 3. Tu acceso ha sido bloqueado temporalmente. Puedes recuperar tu cuenta ahora; el bloqueo se libera automáticamente después de 15 minutos.</p>}
+    {mode === "login" && params.get("registered") && <p className="form-success" role="status">Registro recibido. Revisa tu correo si se requiere confirmar la cuenta; después podrás iniciar sesión.</p>}
+    {mode === "login" && params.get("confirmed") && <p className="form-success" role="status">Correo confirmado. Ya puedes iniciar sesión.</p>}
     {params.get("sent") && <p className="form-success" role="status">Si el correo está registrado, recibirás instrucciones para restablecer tu contraseña.</p>}
-    {params.get("passwordUpdated") && <p className="form-success" role="status">Contraseña actualizada. Ya puedes iniciar sesión.</p>}
     {mode === "login" && <div className="auth-role-picker motion-stack" role="radiogroup" aria-label="Selecciona tu rol">
       {roles.map((role) => (
         <button
@@ -92,8 +81,7 @@ export function AuthForm({ mode }: { mode: Mode }) {
       ))}
       <input type="hidden" name="role" value={selectedRole} />
     </div>}
-    {mode === "login" && <p className="auth-attempts motion-inline" aria-live="polite">Intentos fallidos: <strong>{attemptCount}</strong></p>}
-    {mode === "register" && <><p className="auth-role-note"><span className="role-note-dot"/>Registro para alumnos <span>·</span> Las cuentas docentes se habilitan mediante una solicitud revisada por la institución.</p><Field name="firstName" label="Nombre(s)" autoComplete="given-name"/><Field name="lastName" label="Apellidos" autoComplete="family-name"/><Field name="controlNumber" label="Número de control (opcional)" autoComplete="off"/></>}
+    {mode === "register" && <><p className="auth-role-note"><span className="role-note-dot"/>Registro para estudiantes. Las cuentas docentes requieren solicitud y aprobación institucional.</p><Field name="firstName" label="Nombre(s)" autoComplete="given-name"/><Field name="lastName" label="Apellidos" autoComplete="family-name"/><Field name="controlNumber" label="Número de control (opcional)" autoComplete="off"/></>}
     {mode !== "new-password" && <Field name={mode === "login" ? "identifier" : "email"} label={mode === "login" ? (selectedRole === "alumno" ? "Número de control o correo" : selectedRole === "docente" ? "Número de trabajador o correo" : "Correo institucional") : "Correo electrónico"} type={mode === "login" ? "text" : "email"} autoComplete={mode === "login" ? "username" : "email"}/>}
     {(mode === "login" || mode === "register" || mode === "new-password") && (
       <PasswordField
@@ -104,14 +92,14 @@ export function AuthForm({ mode }: { mode: Mode }) {
         autoComplete={mode === "login" ? "current-password" : "new-password"}
         value={password}
         onChange={setPassword}
-        checks={passwordChecks}
+        checks={mode === "register" || mode === "new-password" ? passwordChecks : []}
         isSecure={isPasswordSecure}
       />
     )}
     {(mode === "register" || mode === "new-password") && <PasswordField name="confirmPassword" label="Confirmar contraseña" show={show} setShow={setShow} autoComplete="new-password" value={confirmPassword} onChange={setConfirmPassword} />}
     {mode === "login" && <div style={{ textAlign: "right", fontSize: 12, margin: "-5px 0 16px" }}><Link className="text-link" href="/recuperar">¿Olvidaste tu contraseña?</Link></div>}
     <SubmitButton label={{ login: "Iniciar sesión", register: "Crear cuenta", reset: "Enviar enlace", "new-password": "Actualizar contraseña" }[mode]} />
-    <div className="auth-bottom">{mode === "login" ? <>¿No tienes cuenta? <Link className="text-link" href="/registro">Regístrate</Link></> : mode === "register" ? <>¿Ya tienes cuenta? <Link className="text-link" href="/login">Inicia sesión</Link></> : <Link className="text-link" href="/login">Volver a iniciar sesión</Link>}</div>
+    <div className="auth-bottom">{mode === "login" ? <>¿No tienes cuenta? <Link className="text-link" href="/registro">Regístrate</Link></> : mode === "register" ? <><Link className="text-link" href="/registro">Elegir tipo de cuenta</Link><span aria-hidden="true"> · </span><Link className="text-link" href="/login">Iniciar sesión</Link></> : <Link className="text-link" href="/login">Volver a iniciar sesión</Link>}</div>
   </form>;
 }
 
@@ -145,5 +133,6 @@ function PasswordField({
   checks?: PasswordCheck[];
   isSecure?: boolean;
 }) {
-  return <div className="field motion-field"><label htmlFor={name}>{label}</label><div className="password-wrap"><input id={name} name={name} type={show ? "text" : "password"} autoComplete={autoComplete} required minLength={name === "password" || name === "confirmPassword" ? 10 : undefined} value={value} onChange={(event) => onChange(event.target.value)} aria-describedby={name === "password" ? "password-help" : undefined} /><button type="button" onClick={() => setShow(!show)} aria-label={show ? "Ocultar contraseña" : "Mostrar contraseña"}>{show ? <EyeOff size={15} /> : <Eye size={15} />} {show ? "Ocultar" : "Mostrar"}</button></div>{checks && checks.length > 0 && name === "password" && <><ul className="password-checklist" id="password-help" aria-live="polite">{checks.map((check) => <li key={check.label} className={check.valid ? "is-valid" : ""}><span aria-hidden="true">{check.valid ? "✓" : "•"}</span>{check.label}</li>)}</ul>{isSecure && <p className="password-strength" role="status">Contraseña segura</p>}</>}</div>;
+  const validatesNewPassword = autoComplete === "new-password";
+  return <div className="field motion-field"><label htmlFor={name}>{label}</label><div className="password-wrap"><input id={name} name={name} type={show ? "text" : "password"} autoComplete={autoComplete} required minLength={validatesNewPassword && (name === "password" || name === "confirmPassword") ? 8 : undefined} value={value} onChange={(event) => onChange(event.target.value)} aria-describedby={checks?.length && name === "password" ? "password-help" : undefined} /><button type="button" onClick={() => setShow(!show)} aria-label={show ? "Ocultar contraseña" : "Mostrar contraseña"}>{show ? <EyeOff size={15} /> : <Eye size={15} />} {show ? "Ocultar" : "Mostrar"}</button></div>{checks && checks.length > 0 && name === "password" && <><ul className="password-checklist" id="password-help" aria-live="polite">{checks.map((check) => <li key={check.label} className={check.valid ? "is-valid" : ""}><span aria-hidden="true">{check.valid ? "✓" : "•"}</span>{check.label}</li>)}</ul>{isSecure && <p className="password-strength" role="status">Contraseña segura</p>}</>}</div>;
 }
