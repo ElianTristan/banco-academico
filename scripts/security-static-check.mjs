@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
 const [
-  auth, middleware, portal, actions, base, hardening, loginLookup, authAttempts,
+  auth, middleware, portal, actions, base, hardening, loginLookup, authAttempts, accountAuthAttempts,
   supabaseServer, completeMigration, callback, authForm, registration, newPassword,
 ] = await Promise.all([
   read("src/app/auth/actions.ts"), read("src/middleware.ts"), read("src/components/portal.tsx"),
@@ -11,6 +11,7 @@ const [
   read("supabase/migrations/0004_secure_role_requests.sql"),
   read("supabase/migrations/0005_server_login_identifier_lookup.sql"),
   read("supabase/migrations/0006_server_auth_attempts.sql"),
+  read("supabase/migrations/0007_account_auth_attempt_limits.sql"),
   read("src/lib/supabase/server.ts"), read("supabase/BANCO_ACADEMICO_MIGRACION_COMPLETA.sql"),
   read("src/app/auth/callback/route.ts"), read("src/components/auth-form.tsx"),
   read("src/app/(auth)/registro/page.tsx"), read("src/app/(auth)/recuperar/nueva/page.tsx"),
@@ -80,11 +81,20 @@ check("Los intentos se limitan en PostgreSQL y soportan concurrencia", () => {
   for (const fn of ["reserve_login_attempt", "complete_login_attempt", "record_auth_event"]) {
     assert.ok(authAttempts.includes(`grant execute on function public.${fn}(`));
   }
-  assert.match(auth, /rpc\("reserve_login_attempt"/);
+  assert.match(auth, /rpc\("reserve_account_login_attempt"/);
+  assert.match(accountAuthAttempts, /create or replace function public\.reserve_account_login_attempt\(\s*target_identifier text\s*\)/);
+  assert.match(accountAuthAttempts, /extensions\.digest\(lower\(btrim\(target_identifier\)\), 'sha256'\)/);
+  assert.doesNotMatch(accountAuthAttempts, /target_client_key/);
+  assert.match(accountAuthAttempts, /revoke all on function public\.reserve_account_login_attempt\(text\) from public, anon, authenticated/);
+  assert.match(accountAuthAttempts, /grant execute on function public\.reserve_account_login_attempt\(text\) to service_role/);
+  assert.match(auth, /resolveEmailForRole\(role, rawIdentifier\)[\s\S]*?reserveLoginAttempt\(resolved\.email \?\? rawIdentifier\)/);
+  assert.doesNotMatch(auth, /x-real-ip|ba-auth-source|clientAttemptKey/);
   assert.match(auth, /failedCredentials/);
   assert.match(auth, /rpc\("complete_login_attempt"/);
   assert.match(completeMigration, /create or replace function public\.reserve_login_attempt/);
   assert.match(completeMigration, /extensions\.digest\(lower\(btrim\(target_identifier\)\)/);
+  assert.match(completeMigration, /0007_account_auth_attempt_limits\.sql/);
+  assert.match(completeMigration, /grant execute on function public\.reserve_account_login_attempt\(text\) to service_role/);
 });
 check("La UI solo presenta el contador después de un fallo confirmado", () => {
   assert.doesNotMatch(authForm, /sessionStorage|localStorage|Intentos fallidos:.*0/);

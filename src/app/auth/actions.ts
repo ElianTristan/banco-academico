@@ -1,8 +1,6 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import { cookies, headers } from "next/headers";
-import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import {
   createClient,
@@ -33,36 +31,14 @@ function getLoginAttemptResult(value: unknown): LoginAttemptResult | null {
   return value as LoginAttemptResult;
 }
 
-async function clientAttemptKey() {
-  const requestHeaders = await headers();
-  const sourceAddress = requestHeaders.get("x-real-ip")?.trim();
-  if (sourceAddress && /^[\da-f:.]+$/i.test(sourceAddress)) return sourceAddress.slice(0, 128);
-
-  const cookieStore = await cookies();
-  const cookieName = "ba-auth-source";
-  const existing = cookieStore.get(cookieName)?.value;
-  if (existing && /^[\da-f-]{36}$/i.test(existing)) return existing;
-
-  const sourceKey = randomUUID();
-  cookieStore.set(cookieName, sourceKey, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    path: "/",
-    maxAge: 60 * 30,
-  });
-  return sourceKey;
-}
-
 async function reserveLoginAttempt(identifier: string) {
   if (!hasSupabaseServiceRoleConfig()) {
     console.error("Login attempt protection is unavailable: service-role configuration is missing.");
     return null;
   }
 
-  const { data, error } = await createServiceRoleClient().rpc("reserve_login_attempt", {
+  const { data, error } = await createServiceRoleClient().rpc("reserve_account_login_attempt", {
     target_identifier: identifier.trim().toLowerCase(),
-    target_client_key: await clientAttemptKey(),
   });
   if (error) {
     console.error("Could not reserve a login attempt.", error);
@@ -158,17 +134,13 @@ export async function signIn(formData: FormData) {
   const supabase = await createClient();
   const role = parsed.data.role ?? "alumno";
   const rawIdentifier = parsed.data.identifier ?? parsed.data.email ?? "";
-  const reservation = await reserveLoginAttempt(rawIdentifier);
+  const resolved = await resolveEmailForRole(role, rawIdentifier);
+  if (!resolved.ok) redirect("/login?error=lookup");
+
+  const reservation = await reserveLoginAttempt(resolved.email ?? rawIdentifier);
   if (!reservation) redirect("/login?error=auth");
   if (reservation.allowed !== true || !reservation.reservation_id) {
     redirect(reservation.locked_until ? "/recuperar?blocked=1" : "/login?error=ocupado");
-  }
-
-  const resolved = await resolveEmailForRole(role, rawIdentifier);
-
-  if (!resolved.ok) {
-    await completeLoginAttempt(reservation.reservation_id, "release");
-    redirect("/login?error=lookup");
   }
 
   if (!resolved.email) {
