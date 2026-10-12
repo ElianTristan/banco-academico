@@ -14,7 +14,7 @@ const content: Record<AppRole, { eyebrow: string; title: string; accent: string;
 export function CampusHero({ role, name, semester, available, enrolled, favorites, materials }: Props) {
   const copy = content[role];
   const shortName = name.trim().split(/\s+/)[0] || "";
-  return <section className={`campus-hero campus-hero-${role}`} aria-labelledby="campus-hero-title">
+  return <section className={`campus-hero campus-hero-${role} motion-section`} data-motion="section" aria-labelledby="campus-hero-title">
     <div className="campus-hero-copy">
       <div className="hero-institution" aria-label="Instituto Tecnológico de San Luis Potosí y Tecnológico Nacional de México">
         <span className="hero-logo hero-logo-itslp"><Image src="/brand/itslp.png" alt="Instituto Tecnológico de San Luis Potosí" width={299} height={280} priority /></span>

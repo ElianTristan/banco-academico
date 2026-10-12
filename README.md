@@ -28,7 +28,8 @@ npm run preview
 
 ## Autenticación y roles
 
-- La identidad de Banco Académico usa un símbolo vectorial y lettering reutilizables. La splash de entrada aparece una vez por pestaña al abrir una ruta de autenticación; al reducir movimiento se acorta y el login permanece accesible aunque la animación no se ejecute.
+- La identidad de Banco Académico usa un símbolo vectorial y lettering reutilizables. La splash de entrada dura aproximadamente dos segundos y aparece una vez por pestaña al abrir una ruta de autenticación; al reducir movimiento se acorta y el login permanece accesible aunque la animación no se ejecute.
+- Las transiciones de rutas, las entradas de secciones, los reveals por scroll y las interacciones comparten tokens de duración y easing en `src/app/globals.css`. `prefers-reduced-motion` mantiene fades breves y elimina el movimiento decorativo; los efectos de hover se reservan para punteros precisos.
 - El registro público permite elegir Estudiante, Docente o Administrador para ver el proceso aplicable, pero solo crea cuentas de **alumno**. El acceso docente requiere revisión y el administrador no se puede registrar públicamente.
 - Un alumno solicita acceso docente desde su perfil. Un administrador valida la solicitud y puede aprobarla desde `/admin/solicitudes`.
 - La primera cuenta administradora se aprovisiona desde el SQL Editor de Supabase siguiendo [docs/SEGURIDAD_Y_ROLES.md](docs/SEGURIDAD_Y_ROLES.md). No uses una clave `service_role` desde el navegador.

@@ -4,6 +4,7 @@ import { useLayoutEffect, useState } from "react";
 import { BrandLockup } from "@/components/brand-lockup";
 
 const SESSION_INTRO_KEY = "ba-session-intro-v1";
+const SESSION_INTRO_DURATION_MS = 2000;
 
 export function SessionIntro({ children }: { children: React.ReactNode }) {
   const [visible, setVisible] = useState(true);
@@ -20,7 +21,10 @@ export function SessionIntro({ children }: { children: React.ReactNode }) {
     }
 
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const timeout = window.setTimeout(() => setVisible(false), reducedMotion ? 240 : 1320);
+    const timeout = window.setTimeout(
+      () => setVisible(false),
+      reducedMotion ? 240 : SESSION_INTRO_DURATION_MS,
+    );
     return () => window.clearTimeout(timeout);
   }, []);
 

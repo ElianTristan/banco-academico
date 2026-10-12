@@ -17,5 +17,5 @@ export function ScrollReveal({children,className=""}:{children:ReactNode;classNa
     observer.observe(node);
     return ()=>observer.disconnect();
   },[]);
-  return <div ref={ref} className={className}>{children}</div>;
+  return <div ref={ref} className={className} data-motion="reveal">{children}</div>;
 }
