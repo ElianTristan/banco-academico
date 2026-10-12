@@ -3,8 +3,8 @@ import { readFile } from "node:fs/promises";
 
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
 const [
-  auth, middleware, portal, actions, base, hardening, loginLookup, authAttempts, accountAuthAttempts,
-  supabaseServer, completeMigration, callback, authForm, registration, newPassword,
+  auth, middleware, portal, actions, base, hardening, loginLookup, authAttempts, accountAuthAttempts, passwordRecoveryUnlock,
+  supabaseServer, completeMigration, callback, authForm, registration, newPassword, passwordUpdated,
 ] = await Promise.all([
   read("src/app/auth/actions.ts"), read("src/middleware.ts"), read("src/components/portal.tsx"),
   read("src/app/academic/actions.ts"), read("supabase/migrations/0001_initial_schema.sql"),
@@ -12,9 +12,11 @@ const [
   read("supabase/migrations/0005_server_login_identifier_lookup.sql"),
   read("supabase/migrations/0006_server_auth_attempts.sql"),
   read("supabase/migrations/0007_account_auth_attempt_limits.sql"),
+  read("supabase/migrations/0008_reset_login_attempts_after_password_recovery.sql"),
   read("src/lib/supabase/server.ts"), read("supabase/BANCO_ACADEMICO_MIGRACION_COMPLETA.sql"),
   read("src/app/auth/callback/route.ts"), read("src/components/auth-form.tsx"),
   read("src/app/(auth)/registro/page.tsx"), read("src/app/(auth)/recuperar/nueva/page.tsx"),
+  read("src/app/(auth)/recuperar/actualizada/page.tsx"),
 ]);
 const checks = [];
 function check(label, assertion) { assertion(); checks.push(label); }
@@ -95,6 +97,18 @@ check("Los intentos se limitan en PostgreSQL y soportan concurrencia", () => {
   assert.match(completeMigration, /extensions\.digest\(lower\(btrim\(target_identifier\)\)/);
   assert.match(completeMigration, /0007_account_auth_attempt_limits\.sql/);
   assert.match(completeMigration, /grant execute on function public\.reserve_account_login_attempt\(text\) to service_role/);
+});
+check("La recuperación exitosa libera el bloqueo de intentos de esa cuenta", () => {
+  assert.match(auth, /reset_account_login_attempts/);
+  assert.match(auth, /const attemptsReset = await resetLoginAttempts\(user\.id\)/);
+  assert.match(auth, /attemptsReset \? "\/recuperar\/actualizada" : "\/recuperar\/actualizada\?unlock=error"/);
+  assert.match(passwordRecoveryUnlock, /set failed_attempts = 0,[\s\S]*locked_until = null/);
+  assert.match(passwordRecoveryUnlock, /delete from public\.login_attempt_reservations/);
+  assert.match(passwordRecoveryUnlock, /revoke all on function public\.reset_account_login_attempts\(uuid\) from public, anon, authenticated/);
+  assert.match(passwordRecoveryUnlock, /grant execute on function public\.reset_account_login_attempts\(uuid\) to service_role/);
+  assert.match(passwordRecoveryUnlock, /for update/);
+  assert.match(passwordUpdated, /bloqueo de acceso fue liberado/);
+  assert.match(passwordUpdated, /no pudimos liberar el bloqueo automáticamente/);
 });
 check("La UI solo presenta el contador después de un fallo confirmado", () => {
   assert.doesNotMatch(authForm, /sessionStorage|localStorage|Intentos fallidos:.*0/);

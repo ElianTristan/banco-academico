@@ -85,6 +85,26 @@ async function recordAuthEvent(userId: string, event: "LOGOUT" | "PASSWORD_RESET
   if (result?.audit_logged === false) console.error(`Could not record the ${event} audit event.`, result.audit_error);
 }
 
+async function resetLoginAttempts(userId: string) {
+  if (!hasSupabaseServiceRoleConfig()) {
+    console.error("Could not clear login-attempt lockout after password reset: service-role configuration is missing.");
+    return false;
+  }
+
+  const { data, error } = await createServiceRoleClient().rpc("reset_account_login_attempts", {
+    target_user_id: userId,
+  });
+  if (error) {
+    console.error("Could not clear login-attempt lockout after password reset.", error);
+    return false;
+  }
+  if (data !== true) {
+    console.error("Login-attempt lockout reset returned an invalid response.");
+    return false;
+  }
+  return true;
+}
+
 function configuredSiteUrl() {
   const value = process.env.NEXT_PUBLIC_SITE_URL;
   if (!value) return null;
@@ -270,10 +290,11 @@ export async function updatePassword(formData: FormData) {
     console.error("Supabase Auth could not update the account password.", { status: error.status, code: error.code });
     redirect("/recuperar/nueva?error=actualizar");
   }
+  const attemptsReset = await resetLoginAttempts(user.id);
   if (hasSupabaseServiceRoleConfig()) await recordAuthEvent(user.id, "PASSWORD_RESET");
   const { error: signOutError } = await supabase.auth.signOut();
   if (signOutError) console.error("Password was updated, but the recovery session could not be closed.", signOutError);
-  redirect("/recuperar/actualizada");
+  redirect(attemptsReset ? "/recuperar/actualizada" : "/recuperar/actualizada?unlock=error");
 }
 
 export async function signOut() {

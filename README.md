@@ -28,6 +28,7 @@ npm run preview
 
 ## Autenticación y roles
 
+- La identidad de Banco Académico usa un símbolo vectorial y lettering reutilizables. La splash de entrada aparece una vez por pestaña al abrir una ruta de autenticación; al reducir movimiento se acorta y el login permanece accesible aunque la animación no se ejecute.
 - El registro público permite elegir Estudiante, Docente o Administrador para ver el proceso aplicable, pero solo crea cuentas de **alumno**. El acceso docente requiere revisión y el administrador no se puede registrar públicamente.
 - Un alumno solicita acceso docente desde su perfil. Un administrador valida la solicitud y puede aprobarla desde `/admin/solicitudes`.
 - La primera cuenta administradora se aprovisiona desde el SQL Editor de Supabase siguiendo [docs/SEGURIDAD_Y_ROLES.md](docs/SEGURIDAD_Y_ROLES.md). No uses una clave `service_role` desde el navegador.
@@ -38,7 +39,7 @@ Para probar los tres espacios, crea cuentas separadas desde el registro para alu
 
 ## Base de datos
 
-Para una base existente, haz un respaldo y aplica en orden `supabase/migrations/0005_server_login_identifier_lookup.sql`, `supabase/migrations/0006_server_auth_attempts.sql` y `supabase/migrations/0007_account_auth_attempt_limits.sql` como migraciones incrementales; aplica la 0007 antes de desplegar el código que la usa. No vuelvas a ejecutar el SQL consolidado sobre una base ya instalada. Las migraciones 0006 y 0007 añaden límites temporales de autenticación y registran eventos mediante funciones solo disponibles para `service_role`; la 0007 cuenta los fallos por cuenta, independientemente de la red y unifica el correo con su identificador institucional. Usa `extensions.digest` para que la función de hash coincida con el esquema donde Supabase instaló `pgcrypto`. Para una instalación nueva, usa `supabase/BANCO_ACADEMICO_MIGRACION_COMPLETA.sql`, que incluye las siete migraciones en orden. Las fuentes incrementales están en `supabase/migrations/`.
+Para una base existente, haz un respaldo y aplica en orden `supabase/migrations/0005_server_login_identifier_lookup.sql`, `supabase/migrations/0006_server_auth_attempts.sql`, `supabase/migrations/0007_account_auth_attempt_limits.sql` y `supabase/migrations/0008_reset_login_attempts_after_password_recovery.sql` como migraciones incrementales; aplica la 0008 antes de desplegar el código que la usa. No vuelvas a ejecutar el SQL consolidado sobre una base ya instalada. Las migraciones 0006 y 0007 añaden límites temporales de autenticación y registran eventos mediante funciones solo disponibles para `service_role`; la 0007 cuenta los fallos por cuenta, independientemente de la red y unifica el correo con su identificador institucional. La 0008 reinicia el contador y libera el bloqueo inmediatamente después de restablecer correctamente la contraseña. Usa `extensions.digest` para que la función de hash coincida con el esquema donde Supabase instaló `pgcrypto`. Para una instalación nueva, usa `supabase/BANCO_ACADEMICO_MIGRACION_COMPLETA.sql`, que incluye las ocho migraciones en orden. Las fuentes incrementales están en `supabase/migrations/`.
 
 ## Deployment en Vercel
 

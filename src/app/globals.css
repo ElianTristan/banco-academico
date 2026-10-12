@@ -805,3 +805,73 @@ html{-webkit-text-size-adjust:100%}
 .app-shell[data-theme="dark"] .registration-security-note{border-color:#405572;background:#1b2d47}
 @media(max-width:600px){.registration-role{min-height:76px;gap:10px;padding:12px 5px}.registration-role-icon{width:35px;height:35px}.registration-role-action{max-width:70px;text-align:right}}
 @media(prefers-reduced-motion:reduce){.registration-role{transition:none}.auth-attempt-message{animation:none}}
+
+.brand-lockup{display:inline-flex;align-items:center;gap:11px;min-width:0;color:inherit}
+.brand-symbol{display:grid;place-items:center;flex:none;width:42px;height:42px;border:1px solid #183b7024;border-radius:13px;background:#102d55;color:#f7f9fc}
+.brand-symbol svg{display:block;width:27px;height:27px;overflow:visible}
+.brand-symbol path{stroke:currentColor;stroke-width:2.1;stroke-linecap:round;stroke-linejoin:round}
+.brand-symbol circle{fill:currentColor}
+.brand-wordmark{display:grid;gap:3px;line-height:1}
+.brand-wordmark-primary,.brand-wordmark-secondary{display:block;white-space:nowrap}
+.brand-wordmark-primary{font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:12px;font-weight:780;letter-spacing:.13em}
+.brand-wordmark-secondary{font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:9px;font-weight:560;letter-spacing:.2em}
+.brand-lockup--compact .brand-symbol{width:40px;height:40px;border-radius:12px}
+.brand-lockup--compact .brand-symbol svg{width:25px;height:25px}
+.brand-lockup--splash{gap:17px}
+.brand-lockup--splash .brand-symbol{width:62px;height:62px;border-color:#ffffff32;border-radius:18px;background:#f7f9fc;color:#102d55}
+.brand-lockup--splash .brand-symbol svg{width:39px;height:39px}
+.brand-lockup--splash .brand-symbol path{stroke-dasharray:70;stroke-dashoffset:70;animation:brand-path-build 580ms var(--motion-ease) 100ms forwards}
+.brand-lockup--splash .brand-symbol circle{opacity:0;transform:scale(.7);transform-origin:center;animation:brand-node-arrive 200ms var(--motion-ease) 590ms forwards}
+.brand-lockup--splash .brand-wordmark{opacity:0;clip-path:inset(0 100% 0 0);animation:brand-wordmark-reveal 420ms var(--motion-ease) 450ms forwards}
+.brand-lockup--splash .brand-wordmark-primary{font-size:18px;letter-spacing:.17em}
+.brand-lockup--splash .brand-wordmark-secondary{font-size:12px;letter-spacing:.24em}
+.auth-side .brand-lockup{color:#f3f7ff}
+.auth-side .brand-symbol,.sidebar .brand-symbol{border-color:#ffffff32;background:#ffffff16;color:#fff}
+.auth-mobile-brand .brand-lockup{color:#18304f}
+.sidebar .brand-lockup{gap:10px}
+.sidebar .brand-wordmark-primary{font-size:10px}
+.sidebar .brand-wordmark-secondary{font-size:8px}
+.topbar-context{gap:15px}
+.topbar-context .brand-lockup{color:#1b2d47}
+.topbar-context .brand-symbol{width:38px;height:38px}
+.topbar-context .brand-symbol svg{width:24px;height:24px}
+.topbar-institution{padding-left:14px;border-left:1px solid #dce4ee;color:#7a899d;font-size:10px}
+.session-intro{position:fixed;inset:0;z-index:9999;display:grid;place-items:center;padding:24px;background:radial-gradient(ellipse at 50% 42%,#193d70 0%,#102d55 46%,#0a1b34 100%);color:#f7f9fc;pointer-events:none;animation:session-intro-dismiss 260ms var(--motion-ease) 1s forwards}
+.session-intro-content{display:grid;justify-items:center;gap:20px}
+.session-intro-lockup{opacity:0;transform:translateY(7px);animation:session-intro-arrive 360ms var(--motion-ease) 330ms forwards}
+.session-intro-signature{margin:0;color:#dce5f1;font-size:9px;font-weight:650;letter-spacing:.22em;opacity:0;animation:session-signature-arrive 240ms var(--motion-ease) 780ms forwards}
+@keyframes brand-path-build{to{stroke-dashoffset:0}}
+@keyframes brand-node-arrive{to{opacity:1;transform:scale(1)}}
+@keyframes brand-wordmark-reveal{to{opacity:1;clip-path:inset(0)}}
+@keyframes session-intro-arrive{to{opacity:1;transform:translateY(0)}}
+@keyframes session-signature-arrive{to{opacity:1}}
+@keyframes session-intro-dismiss{to{opacity:0;visibility:hidden}}
+@media(max-width:600px){
+  .brand-lockup{gap:8px}
+  .brand-lockup--compact .brand-symbol{width:34px;height:34px;border-radius:10px}
+  .brand-lockup--compact .brand-symbol svg{width:22px;height:22px}
+  .brand-lockup--compact .brand-wordmark-primary{font-size:10px}
+  .brand-lockup--compact .brand-wordmark-secondary{font-size:8px}
+  .auth-mobile-brand .brand-lockup{gap:8px}
+  .auth-mobile-brand .brand-symbol{width:33px;height:33px;border-radius:10px}
+  .topbar-context{gap:10px}
+  .topbar-context .brand-lockup{gap:8px}
+  .topbar-context .brand-symbol{width:34px;height:34px}
+  .topbar-context .brand-wordmark-primary{font-size:9px}
+  .topbar-context .brand-wordmark-secondary{font-size:7px}
+  .topbar-institution{max-width:112px;padding-left:9px;font-size:9px;line-height:1.35}
+  .brand-lockup--splash{gap:12px}
+  .brand-lockup--splash .brand-symbol{width:52px;height:52px;border-radius:15px}
+  .brand-lockup--splash .brand-symbol svg{width:33px;height:33px}
+  .brand-lockup--splash .brand-wordmark-primary{font-size:15px}
+  .brand-lockup--splash .brand-wordmark-secondary{font-size:10px}
+  .session-intro-signature{font-size:8px;letter-spacing:.17em}
+}
+@media(prefers-reduced-motion:reduce){
+  .session-intro{animation-duration:180ms;animation-delay:0ms}
+  .session-intro-lockup{animation-duration:160ms;animation-delay:0ms;transform:none}
+  .brand-lockup--splash .brand-symbol path{animation-duration:160ms;animation-delay:0ms}
+  .brand-lockup--splash .brand-symbol circle{animation-duration:120ms;animation-delay:0ms}
+  .brand-lockup--splash .brand-wordmark{animation-duration:160ms;animation-delay:0ms;clip-path:none;transform:none}
+  .session-intro-signature{animation-duration:120ms;animation-delay:0ms}
+}
