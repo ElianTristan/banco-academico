@@ -7,17 +7,25 @@ import { Camera, Moon, Sun } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { saveProfile } from "@/app/academic/actions";
 
-type Career = { id: string; name: string };
+const specialties = [
+  "Ciberseguridad",
+  "Gestión de Servicios de TI",
+] as const;
+
+type EnrolledSubject = { id: string; code: string; name: string; specialty: string | null };
 type Props = {
   userId: string; firstName: string; lastName: string; email: string;
-  theme: "light" | "dark"; avatarUrl: string | null;
-  student: { careerId: string; semester: number | null; specialty: string } | null;
-  careers: Career[];
+  theme: "light" | "dark"; avatarUrl: string | null; avatarPath: string | null;
+  student: { semester: number | null; specialty: string } | null;
+  enrolledSubjects: EnrolledSubject[];
+  subjectsError: string | null;
+  academicError: string | null;
 };
 
 export function ProfileEditor(props: Props) {
   const [theme, setTheme] = useState(props.theme);
-  const [avatarPath, setAvatarPath] = useState("");
+  const [avatarPath, setAvatarPath] = useState(props.avatarPath ?? "");
+  const [specialty, setSpecialty] = useState(props.student?.specialty ?? "");
   const [preview, setPreview] = useState<string | null>(props.avatarUrl);
   const [message, setMessage] = useState("");
   const [busy, startTransition] = useTransition();
@@ -43,6 +51,19 @@ export function ProfileEditor(props: Props) {
   function changeTheme(value: "light" | "dark") {
     setTheme(value);
     document.querySelector<HTMLElement>(".app-shell")?.setAttribute("data-theme", value);
+  }
+
+  function changeSpecialty(value: string) {
+    const incompatible = props.enrolledSubjects.filter(subject => subject.specialty && subject.specialty !== value);
+    if (value && incompatible.length) {
+      const names = incompatible.map(subject => subject.name).join(", ");
+      const accepted = window.confirm(
+        `Tienes materias inscritas fuera de la especialidad seleccionada: ${names}. ` +
+        "Cambiar tu especialidad no modificará ni cancelará esas inscripciones. ¿Quieres continuar?",
+      );
+      if (!accepted) return;
+    }
+    setSpecialty(value);
   }
 
   function submit(formData: FormData) {
@@ -72,9 +93,23 @@ export function ProfileEditor(props: Props) {
         <label className="field"><span>Nombre(s)</span><input name="firstName" required maxLength={80} defaultValue={props.firstName}/></label>
         <label className="field"><span>Apellidos</span><input name="lastName" required maxLength={100} defaultValue={props.lastName}/></label>
         {props.student && <>
-          <label className="field"><span>Carrera</span><select name="careerId" defaultValue={props.student.careerId}><option value="">Selecciona tu carrera</option>{props.careers.map(career => <option value={career.id} key={career.id}>{career.name}</option>)}</select></label>
-          <label className="field"><span>Semestre</span><select name="semester" defaultValue={props.student.semester ?? ""}><option value="">Selecciona</option>{Array.from({length: 20}, (_,i) => i+1).map(semester => <option key={semester} value={semester}>{semester}° semestre</option>)}</select></label>
-          <label className="field fullcol"><span>Especialidad</span><input name="specialty" maxLength={120} placeholder="Ej. Desarrollo de software" defaultValue={props.student.specialty}/></label>
+          <label className="field"><span>Carrera</span><input value="Ingeniería en Sistemas" readOnly aria-readonly="true"/><small className="field-help">Carrera institucional fija del programa.</small></label>
+          <label className="field"><span>Semestre</span><select name="semester" defaultValue={props.student.semester ?? ""} required>
+            <option value="" disabled>Selecciona un semestre</option>
+            {props.student.semester !== null && (props.student.semester < 1 || props.student.semester > 13) && <option value={props.student.semester} disabled>Valor previo inválido: {props.student.semester}</option>}
+            {Array.from({length: 13}, (_,i) => i+1).map(semester => <option key={semester} value={semester}>{semester}° semestre</option>)}
+          </select></label>
+          <label className="field fullcol"><span>Especialidad</span><select name="specialty" value={specialty} onChange={event => changeSpecialty(event.target.value)}>
+            <option value="">Sin seleccionar</option>
+            {specialty && !specialties.some(option => option === specialty) && <option value={specialty} disabled>Valor previo no válido</option>}
+            {specialties.map(option => <option key={option} value={option}>{option}</option>)}
+          </select><small className="field-help">Solo puedes elegir una de las especialidades autorizadas. Tus inscripciones no se cancelan al cambiarla.</small></label>
+          <section className="profile-subjects fullcol" aria-labelledby="profile-subjects-title">
+            <div><h3 id="profile-subjects-title">Materias inscritas</h3><p className="muted">Consulta tu carga vigente. Las inscripciones las administra la institución.</p></div>
+            {props.academicError ? <p className="form-error" role="alert">{props.academicError}</p> : props.subjectsError ? <p className="form-error" role="alert">{props.subjectsError}</p> : props.enrolledSubjects.length ? <ul>
+              {props.enrolledSubjects.map(subject => <li key={subject.id}><span>{subject.name}</span><small>{subject.code}{subject.specialty ? ` · ${subject.specialty}` : ""}</small></li>)}
+            </ul> : <p className="empty">No tienes materias inscritas en este periodo.</p>}
+          </section>
         </>}
       </div>
       <div className="theme-row"><div><strong>Apariencia</strong><p className="muted">Elige cómo quieres ver el Banco Académico.</p></div><div className="theme-picker" role="group" aria-label="Tema visual">

@@ -201,7 +201,7 @@ export async function signIn(formData: FormData) {
     redirect("/login?error=auth");
   }
 
-  const { data: profile, error: profileError } = await supabase.from("profiles").select("role").eq("id", user.id).maybeSingle();
+  const { data: profile, error: profileError } = await supabase.from("profiles").select("role,is_active").eq("id", user.id).maybeSingle();
   if (profileError || !profile) {
     await completeLoginAttempt(reservation.reservation_id, "release");
     if (profileError) console.error("Login profile role verification failed.", profileError);
@@ -211,6 +211,16 @@ export async function signIn(formData: FormData) {
       throw new Error("Could not clear session after profile verification.");
     }
     redirect("/login?error=auth");
+  }
+
+  if (profile.is_active !== true) {
+    await completeLoginAttempt(reservation.reservation_id, "release");
+    const { error: signOutError } = await supabase.auth.signOut();
+    if (signOutError) {
+      console.error("Could not clear a session for a deactivated account.", signOutError);
+      throw new Error("Could not clear session for a deactivated account.");
+    }
+    redirect("/login?error=inactive");
   }
 
   const completion = await completeLoginAttempt(reservation.reservation_id, "success", user.id);

@@ -632,6 +632,27 @@ html{-webkit-text-size-adjust:100%}
 @media(prefers-reduced-transparency:reduce){.hero-node{backdrop-filter:none;background:#fff}}
 @media(hover:hover) and (pointer:fine){.hero-primary:hover{transform:translateY(-2px);background:#f5f7fb}.hero-secondary:hover{color:#e8bdca}.hero-secondary:hover svg{transform:translate(2px,2px)}}
 
+/* Keep the dashboard welcome concise and static; the orbit graphic added no task value. */
+.campus-hero{display:block;min-height:0;margin:0 0 22px;overflow:visible;border-radius:0;background:transparent;color:var(--ink);box-shadow:none}
+.campus-hero::before,.campus-hero::after,.hero-institution,.hero-graphic,.hero-index,.hero-signal{display:none}
+.campus-hero-copy{max-width:780px;padding:0}
+.hero-greeting{margin:0 0 8px;color:#526d78;font-size:13px;font-weight:650}
+.campus-hero h1{max-width:700px;margin:0 0 10px;color:#152d36;font-size:clamp(28px,3vw,38px);font-weight:650;line-height:1.12;letter-spacing:-.035em}
+.campus-hero h1 em{color:#176f59}
+.campus-hero-description{max-width:620px;color:#526d78;font-size:13px;line-height:1.6}
+.hero-context{color:#526d78}
+.campus-hero-actions{margin-top:17px}
+.hero-primary{border-color:#176f59;background:#176f59;color:#fff;box-shadow:none}
+.hero-primary svg,.hero-secondary svg{color:inherit}
+.hero-secondary{color:#176f59}
+.campus-hero+.stats .stat strong{font-size:27px}
+.motion-shell .main>.campus-hero{animation:none}
+.app-shell[data-theme="dark"] .campus-hero{background:transparent;box-shadow:none}
+.app-shell[data-theme="dark"] .campus-hero h1{color:#edf3fb}
+.app-shell[data-theme="dark"] .hero-greeting,.app-shell[data-theme="dark"] .campus-hero-description,.app-shell[data-theme="dark"] .hero-context{color:#bac8da}
+.app-shell[data-theme="dark"] .hero-secondary{color:#8ed2b5}
+@media(max-width:680px){.campus-hero{min-height:0;margin-bottom:18px;border-radius:0}.campus-hero-copy{padding:0}.campus-hero h1{font-size:clamp(27px,7vw,34px)}.campus-hero-description{font-size:12px}.campus-hero-actions{margin-top:15px;gap:14px}.hero-primary,.hero-secondary{font-size:11px}.hero-primary{min-height:41px;padding:0 12px}}
+
 /* Photography-led campus experience and responsive editorial art direction. */
 .auth-shell{grid-template-columns:minmax(450px,.96fr) minmax(490px,1.04fr);min-height:100svh;background:#f7f8fb}
 .auth-side{position:relative;isolation:isolate;z-index:0;display:flex;min-height:100svh;flex-direction:column;justify-content:space-between;overflow:hidden;padding:clamp(28px,4vw,58px);background:#102d55;color:#f7f9fd}
@@ -731,6 +752,17 @@ html{-webkit-text-size-adjust:100%}
 .app-shell[data-theme="dark"] .admin-role-badge{border-color:#405572;background:#1b2d47;color:#d5e0ef}
 @media(max-width:600px){.admin-directory-search>div{flex-wrap:wrap}.admin-person-row{grid-template-columns:38px minmax(0,1fr);gap:5px 10px;padding:12px 5px}.admin-person-avatar{grid-row:1/3}.admin-person-identity{grid-column:2}.admin-role-badge{grid-column:2;margin-top:2px}.admin-person-row time{grid-column:2;justify-self:start}}
 @media(hover:none){.admin-person-row:hover{background:transparent}}
+.admin-users-workspace{display:grid;gap:16px}
+.admin-account-form{max-width:860px}
+.admin-account-status{justify-self:start;padding:5px 8px;border:1px solid #e6c9c9;border-radius:999px;background:#fff1f1;color:#9a3c3c;font-size:10px;font-weight:650}
+.admin-account-status.is-active{border-color:#cde4d8;background:#edf7f1;color:#28664f}
+.admin-person-row.is-inactive{background:#fafbfc}
+.admin-deactivate-button{justify-self:end;min-height:34px;padding:0 10px;font-size:10px;white-space:nowrap}
+.app-shell[data-theme="dark"] .admin-account-status{border-color:#694343;background:#38252a;color:#ffbcbc}
+.app-shell[data-theme="dark"] .admin-account-status.is-active{border-color:#345b49;background:#1d382d;color:#a8e3c3}
+.app-shell[data-theme="dark"] .admin-person-row.is-inactive{background:#111e31}
+@media(max-width:800px){.admin-person-row{grid-template-columns:38px minmax(0,1fr) auto auto}.admin-person-row time{grid-column:2;justify-self:start}.admin-deactivate-button{grid-column:4;grid-row:2}}
+@media(max-width:600px){.admin-person-row{grid-template-columns:38px minmax(0,1fr);gap:7px 10px}.admin-person-avatar{grid-row:auto}.admin-person-identity,.admin-role-badge,.admin-account-status,.admin-person-row time,.admin-deactivate-button{grid-column:2;justify-self:start}.admin-person-identity{grid-row:1}.admin-role-badge{margin-top:0}.admin-deactivate-button{grid-row:auto}}
 
 .registration-choice,.registration-guidance{width:min(100%,520px);margin-inline:auto}
 .registration-choice .auth-form-head,.registration-guidance .auth-form-head{margin-bottom:22px}

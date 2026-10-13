@@ -20,6 +20,7 @@ const messages: Record<string, string> = {
   lookup: "No pudimos validar el acceso en este momento. Intenta con tu correo o vuelve a intentarlo más tarde.",
   rol: "El rol seleccionado no coincide con tu cuenta. Selecciona el rol autorizado para este perfil.",
   registro: "No pudimos crear la cuenta. Verifica los datos o intenta iniciar sesión.",
+  inactive: "El acceso a esta cuenta fue desactivado por administración. Contacta al área administrativa de tu institución.",
   existente: "Este correo ya tiene una cuenta. Intenta iniciar sesión o recuperar tu contraseña.",
   configuracion: "El servicio de autenticación no está configurado para este entorno. Contacta al administrador.",
   enlace: "El enlace no es válido o venció. Solicita uno nuevo.",

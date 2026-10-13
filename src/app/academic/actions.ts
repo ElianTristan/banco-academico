@@ -45,27 +45,34 @@ export async function saveProfile(formData: FormData): Promise<ActionResult> {
     lastName: z.string().trim().min(1).max(100),
     theme: z.enum(["light", "dark"]),
     avatarPath: z.string().max(500).optional().default(""),
-    careerId: z.union([z.string().uuid(), z.literal("")]).default(""),
-    semester: z.union([z.coerce.number().int().min(1).max(20), z.literal("")]).optional(),
-    specialty: z.string().trim().max(120).optional().default(""),
+    semester: z.coerce.number().int().min(1).max(13).optional(),
+    specialty: z.enum(["Ciberseguridad", "Gestión de Servicios de TI"]).or(z.literal("")).optional().default(""),
   }).safeParse(Object.fromEntries(formData));
-  if (!parsed.success) return { ok: false, error: "Revisa tu nombre, carrera y semestre." };
+  if (!parsed.success) return { ok: false, error: "Revisa tu nombre, semestre y especialidad. El semestre debe estar entre 1 y 13." };
   const { supabase, user, role } = await actor();
   if (!user) return { ok: false, error: "Inicia sesión para editar tu perfil." };
-  const { avatarPath, careerId, semester, specialty, ...profileFields } = parsed.data;
+  const { avatarPath, semester, specialty, ...profileFields } = parsed.data;
   if (avatarPath && !avatarPath.startsWith(`${user.id}/`)) return { ok: false, error: "La fotografía no pertenece a tu cuenta." };
+  if (role === "alumno") {
+    if (semester === undefined) return { ok: false, error: "Selecciona un semestre entre 1 y 13." };
+    const { error } = await supabase.rpc("save_student_academic_profile", {
+      target_first_name: profileFields.firstName,
+      target_last_name: profileFields.lastName,
+      target_preferred_theme: profileFields.theme,
+      target_avatar_path: avatarPath,
+      target_semester: semester,
+      target_specialty: specialty || null,
+    });
+    if (error) return { ok: false, error: "No se guardaron los cambios académicos. Verifica que esté aplicada la migración 0009 y vuelve a intentar." };
+    revalidatePath("/alumno");
+    return { ok: true };
+  }
   const { error: profileError } = await supabase.from("profiles").update({
     first_name: profileFields.firstName, last_name: profileFields.lastName,
-    preferred_theme: profileFields.theme, avatar_path: avatarPath || null,
+    preferred_theme: profileFields.theme,
+    ...(avatarPath ? { avatar_path: avatarPath } : {}),
   }).eq("id", user.id);
   if (profileError) return { ok: false, error: "No se pudieron guardar tus datos personales." };
-  if (role === "alumno") {
-    const { error } = await supabase.from("students").update({
-      career_id: careerId || null, semester: semester === "" ? null : semester ?? null,
-      specialty: specialty || null,
-    }).eq("id", user.id);
-    if (error) return { ok: false, error: "Se guardó tu nombre, pero no los datos académicos. Ejecuta la migración 0003." };
-  }
   await supabase.from("activity_logs").insert({ user_id: user.id, action: "Actualizó su perfil", module: "Perfil", description: "Datos personales y preferencias" });
   revalidatePath("/alumno"); revalidatePath("/docente"); revalidatePath("/admin");
   return { ok: true };

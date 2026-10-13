@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
 const [
   auth, middleware, portal, actions, base, hardening, loginLookup, authAttempts, accountAuthAttempts, passwordRecoveryUnlock,
-  supabaseServer, completeMigration, callback, authForm, registration, newPassword, passwordUpdated,
+  supabaseServer, completeMigration, callback, authForm, registration, newPassword, passwordUpdated, adminActions, managedUserMigration,
 ] = await Promise.all([
   read("src/app/auth/actions.ts"), read("src/middleware.ts"), read("src/components/portal.tsx"),
   read("src/app/academic/actions.ts"), read("supabase/migrations/0001_initial_schema.sql"),
@@ -17,6 +17,7 @@ const [
   read("src/app/auth/callback/route.ts"), read("src/components/auth-form.tsx"),
   read("src/app/(auth)/registro/page.tsx"), read("src/app/(auth)/recuperar/nueva/page.tsx"),
   read("src/app/(auth)/recuperar/actualizada/page.tsx"),
+  read("src/app/admin/actions.ts"), read("supabase/migrations/0010_admin_user_lifecycle.sql"),
 ]);
 const checks = [];
 function check(label, assertion) { assertion(); checks.push(label); }
@@ -31,7 +32,9 @@ check("Alta Auth asigna alumno en PostgreSQL e ignora roles de metadata", () => 
 });
 check("Middleware valida sesión y rol desde profiles", () => {
   assert.match(middleware, /supabase\.auth\.getUser\(\)/);
-  assert.match(middleware, /from\("profiles"\)\.select\("role"\)/);
+  assert.match(middleware, /from\("profiles"\)\.select\("role,is_active"\)/);
+  assert.match(middleware, /profile\?\.is_active === false/);
+  assert.match(auth, /if \(profile\.is_active !== true\)/);
   assert.match(middleware, /requiredRole && requiredRole !== home/);
 });
 check("La página vuelve a comprobar el rol en el servidor", () => {
@@ -39,6 +42,23 @@ check("La página vuelve a comprobar el rol en el servidor", () => {
 });
 check("Acciones sensibles validan el rol del actor", () => {
   for (const role of ["administrador", "docente", "alumno"]) assert.ok(actions.includes(`role !== "${role}"`));
+});
+check("Gestión de cuentas requiere administrador y usa Auth service-role solo en servidor", () => {
+  assert.match(adminActions, /"use server"/);
+  assert.match(adminActions, /profile\?\.role !== "administrador" \|\| profile\.is_active !== true/);
+  assert.match(adminActions, /inviteUserByEmail/);
+  assert.match(adminActions, /rpc\("finalize_admin_created_user"/);
+  assert.match(adminActions, /createServiceRoleClient\(\)/);
+  assert.doesNotMatch(adminActions, /NEXT_PUBLIC_SERVICE_ROLE_KEY/);
+});
+check("Desactivar cuentas conserva datos, protege la última cuenta admin y permite reactivar", () => {
+  assert.match(managedUserMigration, /add column if not exists is_active boolean not null default true/);
+  assert.match(managedUserMigration, /perform pg_advisory_xact_lock/);
+  assert.match(managedUserMigration, /Debe permanecer al menos una cuenta administradora activa/);
+  assert.match(managedUserMigration, /No puedes desactivar tu propia cuenta/);
+  assert.match(managedUserMigration, /function public\.reactivate_managed_user/);
+  assert.doesNotMatch(managedUserMigration, /delete from auth\.users|delete from public\.profiles/i);
+  assert.match(completeMigration, /0010_admin_user_lifecycle\.sql/);
 });
 check("El trigger bloquea cambios de rol por PostgREST", () => {
   assert.match(hardening, /current_user not in \('postgres', 'service_role'\) or not public\.is_admin\(\)/);
