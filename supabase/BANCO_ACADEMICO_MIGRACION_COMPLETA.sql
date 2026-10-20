@@ -1730,7 +1730,7 @@ begin
     'ADMIN_USER_CREATED',
     'Usuarios',
     target_user_id::text,
-    'Creó una cuenta institucional e invitó a la persona por correo',
+    'Creó una cuenta institucional con contraseña temporal',
     jsonb_build_object('role', target_role)
   );
 end;
@@ -1740,5 +1740,9 @@ revoke all on function public.finalize_admin_created_user(uuid, uuid, text, text
   from public, anon, authenticated;
 grant execute on function public.finalize_admin_created_user(uuid, uuid, text, text, text, text)
   to service_role;
+
+-- ===== 0011_institutional_temporary_password.sql =====
+-- Las altas gestionadas por administración asignan la contraseña temporal institucional
+-- (Tec12345!) y se auditan sin almacenar contraseñas ni secretos en texto plano.
 
 COMMIT;

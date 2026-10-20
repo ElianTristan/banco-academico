@@ -6,6 +6,8 @@ import { createClient, createServiceRoleClient, hasSupabaseServiceRoleConfig } f
 
 type AdminActionResult = { ok: true } | { ok: false; error: string };
 
+export const TEMPORARY_PASSWORD = "Tec12345!";
+
 const accountSchema = z.object({
   role: z.enum(["alumno", "docente"]),
   firstName: z.string().trim().min(1, "Escribe el nombre.").max(80, "El nombre es demasiado largo."),
@@ -46,6 +48,9 @@ async function getActiveAdministrator(): Promise<{ actorId: string } | AdminActi
   if (profile?.role !== "administrador" || profile.is_active !== true) {
     return { ok: false, error: "Esta acción requiere una cuenta administradora activa." };
   }
+  if (user.app_metadata?.must_change_password === true || user.user_metadata?.must_change_password === true) {
+    return { ok: false, error: "Debes cambiar tu contraseña temporal antes de gestionar cuentas." };
+  }
   return { actorId: user.id };
 }
 
@@ -85,22 +90,32 @@ export async function createManagedUser(formData: FormData): Promise<AdminAction
     if (existingTeacher) return { ok: false, error: "Ya existe una cuenta con ese número de trabajador." };
   }
 
-  const { data: invitation, error: invitationError } = await service.auth.admin.inviteUserByEmail(parsed.data.email, {
-    data: { first_name: parsed.data.firstName, last_name: parsed.data.lastName },
+  const { data: created, error: createError } = await service.auth.admin.createUser({
+    email: parsed.data.email,
+    password: TEMPORARY_PASSWORD,
+    email_confirm: true,
+    user_metadata: {
+      first_name: parsed.data.firstName,
+      last_name: parsed.data.lastName,
+      must_change_password: true,
+    },
+    app_metadata: {
+      must_change_password: true,
+    },
   });
-  const invitedUser = invitation.user;
-  if (invitationError || !invitedUser) {
-    if (invitationError) console.error("Could not invite a managed academic account.", invitationError);
+  const createdUser = created?.user;
+  if (createError || !createdUser) {
+    if (createError) console.error("Could not create a managed academic account.", createError);
     return {
       ok: false,
-      error: invitationError?.code === "email_exists" || invitationError?.code === "user_already_exists"
+      error: createError?.code === "email_exists" || createError?.code === "user_already_exists"
         ? "Ya existe una cuenta con ese correo."
-        : "No se pudo enviar la invitación. Revisa el correo y la configuración de correo de Supabase.",
+        : "No se pudo registrar la cuenta institucional. Revisa los datos y la configuración de Supabase Auth.",
     };
   }
 
   const { error: finalizeError } = await service.rpc("finalize_admin_created_user", {
-    target_user_id: invitedUser.id,
+    target_user_id: createdUser.id,
     target_admin_id: administrator.actorId,
     target_role: parsed.data.role,
     target_control_number: parsed.data.role === "alumno" ? parsed.data.controlNumber : null,
@@ -108,9 +123,9 @@ export async function createManagedUser(formData: FormData): Promise<AdminAction
     target_department: parsed.data.role === "docente" ? parsed.data.department : null,
   });
   if (finalizeError) {
-    console.error("Could not finish provisioning an invited academic account.", finalizeError);
-    const { error: cleanupError } = await service.auth.admin.deleteUser(invitedUser.id);
-    if (cleanupError) console.error("Could not remove the incomplete invited account after provisioning failed.", cleanupError);
+    console.error("Could not finish provisioning a managed academic account.", finalizeError);
+    const { error: cleanupError } = await service.auth.admin.deleteUser(createdUser.id);
+    if (cleanupError) console.error("Could not remove the incomplete account after provisioning failed.", cleanupError);
     return {
       ok: false,
       error: "No se pudo completar el alta. Verifica que el número institucional no esté registrado y que la migración 0009 esté aplicada.",

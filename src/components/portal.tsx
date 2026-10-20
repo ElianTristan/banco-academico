@@ -66,6 +66,9 @@ export async function Portal({role,section,query,authSuccess=false}:{role:AppRol
   const supabase=await createClient();
   const {data:{user}}=await supabase.auth.getUser();
   if(!user)redirect("/login");
+  if(user.app_metadata?.must_change_password===true||user.user_metadata?.must_change_password===true){
+    redirect("/recuperar/nueva?required=1");
+  }
   const {data:profile}=await supabase.from("profiles").select("first_name,last_name,email,role,is_active,preferred_theme,avatar_path").eq("id",user.id).maybeSingle();
   if(!isAppRole(profile?.role))redirect("/acceso-pendiente");
   if(profile.is_active!==true)redirect("/login?error=inactive");

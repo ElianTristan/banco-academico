@@ -5,7 +5,7 @@ import { useFormStatus } from "react-dom";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Eye, EyeOff } from "lucide-react";
-import { requestPasswordReset, signIn, signUp, updatePassword } from "@/app/auth/actions";
+import { requestPasswordReset, signIn, signUp, updatePassword, signOut } from "@/app/auth/actions";
 
 type Mode = "login" | "register" | "reset" | "new-password";
 type AppRole = "alumno" | "docente" | "administrador";
@@ -26,6 +26,7 @@ const messages: Record<string, string> = {
   enlace: "El enlace no es válido o venció. Solicita uno nuevo.",
   recuperacion: "No pudimos iniciar la recuperación en este momento. Inténtalo más tarde.",
   actualizar: "No pudimos actualizar la contraseña. Solicita un enlace nuevo.",
+  temporal: "Debes elegir una contraseña definitiva distinta de la contraseña temporal.",
 };
 
 const roles: { value: AppRole; label: string; hint: string }[] = [
@@ -64,6 +65,7 @@ export function AuthForm({ mode }: { mode: Mode }) {
       ? <p className="form-error auth-attempt-message" role="alert">Intento {attempt} de 3. Verifica tu correo y contraseña.</p>
       : error && <p className="form-error" role="alert">{messages[error] ?? "Ocurrió un problema. Inténtalo de nuevo."}</p>}
     {mode === "reset" && params.get("blocked") === "1" && <p className="form-error auth-attempt-message" role="alert">Intento 3 de 3. Tu acceso ha sido bloqueado temporalmente. Puedes recuperar tu cuenta ahora; el bloqueo se libera automáticamente después de 15 minutos.</p>}
+    {mode === "new-password" && params.get("required") === "1" && <p className="auth-role-note" role="status"><span className="role-note-dot"/>Primer ingreso: por seguridad institucional, debes cambiar la contraseña temporal Tec12345! antes de acceder al panel académico.</p>}
     {mode === "login" && params.get("registered") && <p className="form-success" role="status">Registro recibido. Revisa tu correo si se requiere confirmar la cuenta; después podrás iniciar sesión.</p>}
     {mode === "login" && params.get("confirmed") && <p className="form-success" role="status">Correo confirmado. Ya puedes iniciar sesión.</p>}
     {params.get("sent") && <p className="form-success" role="status">Si el correo está registrado, recibirás instrucciones para restablecer tu contraseña.</p>}
@@ -100,7 +102,7 @@ export function AuthForm({ mode }: { mode: Mode }) {
     {(mode === "register" || mode === "new-password") && <PasswordField name="confirmPassword" label="Confirmar contraseña" show={show} setShow={setShow} autoComplete="new-password" value={confirmPassword} onChange={setConfirmPassword} />}
     {mode === "login" && <div style={{ textAlign: "right", fontSize: 12, margin: "-5px 0 16px" }}><Link className="text-link" href="/recuperar">¿Olvidaste tu contraseña?</Link></div>}
     <SubmitButton label={{ login: "Iniciar sesión", register: "Crear cuenta", reset: "Enviar enlace", "new-password": "Actualizar contraseña" }[mode]} />
-    <div className="auth-bottom">{mode === "login" ? <>¿No tienes cuenta? <Link className="text-link" href="/registro">Regístrate</Link></> : mode === "register" ? <><Link className="text-link" href="/registro">Elegir tipo de cuenta</Link><span aria-hidden="true"> · </span><Link className="text-link" href="/login">Iniciar sesión</Link></> : <Link className="text-link" href="/login">Volver a iniciar sesión</Link>}</div>
+    <div className="auth-bottom">{mode === "login" ? <>¿No tienes cuenta? <Link className="text-link" href="/registro">Regístrate</Link></> : mode === "register" ? <><Link className="text-link" href="/registro">Elegir tipo de cuenta</Link><span aria-hidden="true"> · </span><Link className="text-link" href="/login">Iniciar sesión</Link></> : mode === "new-password" && params.get("required") === "1" ? <form action={signOut}><button type="submit" className="text-link" style={{ background: "none", border: "none", cursor: "pointer", font: "inherit", padding: 0 }}>Cerrar sesión temporal</button></form> : <Link className="text-link" href="/login">Volver a iniciar sesión</Link>}</div>
   </form>;
 }
 

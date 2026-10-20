@@ -64,7 +64,7 @@ export function AdminUsersWorkspace({
       const result = await createManagedUser(formData);
       setMessageIsError(!result.ok);
       setMessage(result.ok
-        ? `Invitación enviada; la cuenta de ${invitedRole === "alumno" ? "alumno" : "docente"} quedó registrada.`
+        ? `Cuenta de ${invitedRole === "alumno" ? "alumno" : "docente"} registrada con la contraseña temporal Tec12345!.`
         : result.error);
       if (result.ok) {
         form.reset();
@@ -100,8 +100,8 @@ export function AdminUsersWorkspace({
     <section className="panel admin-directory">
       <div className="module-toolbar">
         <div>
-          <h2>{roleFilter === "all" ? "Invitar a un alumno o docente" : `Dar de alta ${labels[roleFilter].toLowerCase()}`}</h2>
-          <p className="muted">Se enviará una invitación al correo para que la persona active su cuenta y establezca su contraseña.</p>
+          <h2>{roleFilter === "all" ? "Registrar alumno o docente" : `Dar de alta ${labels[roleFilter].toLowerCase()}`}</h2>
+          <p className="muted">Se asignará la contraseña temporal Tec12345! para su primer ingreso; se requerirá cambiarla al iniciar sesión.</p>
         </div>
         <UserPlus size={20} aria-hidden="true"/>
       </div>
@@ -119,7 +119,7 @@ export function AdminUsersWorkspace({
             </>}
         </div>
         {message && <p className={messageIsError ? "form-error" : "form-success"} role={messageIsError ? "alert" : "status"}>{message}</p>}
-        <button className="button" type="submit" disabled={busy}><UserPlus size={15}/>{busy ? "Enviando invitación…" : "Enviar invitación y registrar"}</button>
+        <button className="button" type="submit" disabled={busy}><UserPlus size={15}/>{busy ? "Registrando cuenta…" : "Registrar cuenta"}</button>
       </form>
       <p className="admin-directory-foot">Desactivar una cuenta bloquea su acceso sin borrar su expediente académico.</p>
     </section>

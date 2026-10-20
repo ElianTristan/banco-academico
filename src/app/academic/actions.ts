@@ -12,6 +12,9 @@ async function actor() {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return { supabase, user: null, role: null };
+  if (user.app_metadata?.must_change_password === true || user.user_metadata?.must_change_password === true) {
+    return { supabase, user: null, role: null };
+  }
   const { data } = await supabase.from("profiles").select("role").eq("id", user.id).maybeSingle();
   return { supabase, user, role: data?.role as string | null };
 }

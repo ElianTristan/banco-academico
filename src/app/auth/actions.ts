@@ -10,6 +10,7 @@ import {
 
 const emailSchema = z.string().trim().email("Escribe un correo válido.");
 const appRoleSchema = z.enum(["alumno", "docente", "administrador"]);
+export const TEMPORARY_PASSWORD = "Tec12345!";
 const passwordSchema = z.string()
   .min(8, "Usa al menos 8 caracteres.")
   .regex(/[A-Z]/, "Incluye una mayúscula.")
@@ -234,6 +235,13 @@ export async function signIn(formData: FormData) {
     redirect("/login?error=rol");
   }
 
+  const requiresPasswordChange = Boolean(
+    user.app_metadata?.must_change_password === true || user.user_metadata?.must_change_password === true
+  );
+  if (requiresPasswordChange) {
+    redirect("/recuperar/nueva?required=1");
+  }
+
   if (profile.role === "alumno") redirect("/alumno?auth=success");
   if (profile.role === "docente") redirect("/docente?auth=success");
   if (profile.role === "administrador") redirect("/admin?auth=success");
@@ -292,13 +300,25 @@ export async function requestPasswordReset(formData: FormData) {
 export async function updatePassword(formData: FormData) {
   const parsed = z.object({ password: passwordSchema, confirmPassword: z.string() }).safeParse(Object.fromEntries(formData));
   if (!parsed.success || parsed.data.password !== parsed.data.confirmPassword) redirect("/recuperar/nueva?error=datos");
+  if (parsed.data.password === TEMPORARY_PASSWORD) {
+    redirect("/recuperar/nueva?error=temporal&required=1");
+  }
   const supabase = await createClient();
   const { data: { user }, error: userError } = await supabase.auth.getUser();
   if (userError || !user) redirect("/recuperar?error=enlace");
-  const { error } = await supabase.auth.updateUser({ password: parsed.data.password });
+  const { error } = await supabase.auth.updateUser({ password: parsed.data.password, data: { must_change_password: false } });
   if (error) {
     console.error("Supabase Auth could not update the account password.", { status: error.status, code: error.code });
     redirect("/recuperar/nueva?error=actualizar");
+  }
+  if (hasSupabaseServiceRoleConfig()) {
+    const { error: adminUpdateError } = await createServiceRoleClient().auth.admin.updateUserById(user.id, {
+      app_metadata: { must_change_password: false },
+      user_metadata: { must_change_password: false },
+    });
+    if (adminUpdateError) {
+      console.error("Could not clear administrative password-change flag.", adminUpdateError);
+    }
   }
   const attemptsReset = await resetLoginAttempts(user.id);
   if (hasSupabaseServiceRoleConfig()) await recordAuthEvent(user.id, "PASSWORD_RESET");

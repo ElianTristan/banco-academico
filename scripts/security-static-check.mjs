@@ -5,6 +5,7 @@ const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
 const [
   auth, middleware, portal, actions, base, hardening, loginLookup, authAttempts, accountAuthAttempts, passwordRecoveryUnlock,
   supabaseServer, completeMigration, callback, authForm, registration, newPassword, passwordUpdated, adminActions, managedUserMigration,
+  temporaryPasswordMigration,
 ] = await Promise.all([
   read("src/app/auth/actions.ts"), read("src/middleware.ts"), read("src/components/portal.tsx"),
   read("src/app/academic/actions.ts"), read("supabase/migrations/0001_initial_schema.sql"),
@@ -18,6 +19,7 @@ const [
   read("src/app/(auth)/registro/page.tsx"), read("src/app/(auth)/recuperar/nueva/page.tsx"),
   read("src/app/(auth)/recuperar/actualizada/page.tsx"),
   read("src/app/admin/actions.ts"), read("supabase/migrations/0010_admin_user_lifecycle.sql"),
+  read("supabase/migrations/0011_institutional_temporary_password.sql"),
 ]);
 const checks = [];
 function check(label, assertion) { assertion(); checks.push(label); }
@@ -46,7 +48,7 @@ check("Acciones sensibles validan el rol del actor", () => {
 check("Gestión de cuentas requiere administrador y usa Auth service-role solo en servidor", () => {
   assert.match(adminActions, /"use server"/);
   assert.match(adminActions, /profile\?\.role !== "administrador" \|\| profile\.is_active !== true/);
-  assert.match(adminActions, /inviteUserByEmail/);
+  assert.match(adminActions, /createUser/);
   assert.match(adminActions, /rpc\("finalize_admin_created_user"/);
   assert.match(adminActions, /createServiceRoleClient\(\)/);
   assert.doesNotMatch(adminActions, /NEXT_PUBLIC_SERVICE_ROLE_KEY/);
@@ -166,6 +168,29 @@ check("Las claves nuevas cumplen ocho caracteres, clases y carácter especial", 
   assert.match(auth, /regex\(\/\[\^\\p\{L\}\\p\{N\}\]\/u/);
   assert.match(authForm, /Carácter especial/);
   assert.match(authForm, /checks=\{mode === "register" \|\| mode === "new-password"/);
+});
+check("Contraseña temporal institucional Tec12345! configurada solo en backend seguro y asignada en createUser", () => {
+  assert.match(adminActions, /TEMPORARY_PASSWORD\s*=\s*"Tec12345!"/);
+  assert.match(adminActions, /createUser\(\s*\{[\s\S]*?password:\s*TEMPORARY_PASSWORD/);
+  assert.match(adminActions, /must_change_password:\s*true/);
+  assert.doesNotMatch(adminActions, /insert into.*password/i);
+  assert.doesNotMatch(temporaryPasswordMigration, /Tec12345!/);
+});
+check("Restricción en servidor exige cambio obligatorio de contraseña temporal antes de acceder al panel", () => {
+  assert.match(middleware, /must_change_password/);
+  assert.match(middleware, /recuperar\/nueva\?required=1/);
+  assert.match(portal, /must_change_password/);
+  assert.match(portal, /recuperar\/nueva\?required=1/);
+  assert.match(auth, /must_change_password/);
+  assert.match(auth, /recuperar\/nueva\?required=1/);
+  assert.match(actions, /must_change_password/);
+});
+check("Almacenamiento seguro: contraseñas gestionadas por Supabase Auth, sin texto plano en perfiles ni bitácoras", () => {
+  assert.match(auth, /supabase\.auth\.updateUser\(\s*\{[\s\S]*?password:[\s\S]*?must_change_password:\s*false/);
+  assert.doesNotMatch(completeMigration, /alter table public\.profiles add column.*password/i);
+  assert.doesNotMatch(completeMigration, /insert into public\.activity_logs.*Tec12345!/i);
+  assert.match(temporaryPasswordMigration, /Creó una cuenta institucional con contraseña temporal/);
+  assert.match(completeMigration, /0011_institutional_temporary_password\.sql/);
 });
 
 console.log(`PASS ${checks.length} comprobaciones estáticas de seguridad:`);
