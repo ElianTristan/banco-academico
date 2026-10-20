@@ -10,7 +10,7 @@ import {
 
 const emailSchema = z.string().trim().email("Escribe un correo válido.");
 const appRoleSchema = z.enum(["alumno", "docente", "administrador"]);
-export const TEMPORARY_PASSWORD = "Tec12345!";
+const TEMPORARY_PASSWORD = "Tec12345!";
 const passwordSchema = z.string()
   .min(8, "Usa al menos 8 caracteres.")
   .regex(/[A-Z]/, "Incluye una mayúscula.")

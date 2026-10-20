@@ -6,7 +6,7 @@ import { createClient, createServiceRoleClient, hasSupabaseServiceRoleConfig } f
 
 type AdminActionResult = { ok: true } | { ok: false; error: string };
 
-export const TEMPORARY_PASSWORD = "Tec12345!";
+const TEMPORARY_PASSWORD = "Tec12345!";
 
 const accountSchema = z.object({
   role: z.enum(["alumno", "docente"]),
