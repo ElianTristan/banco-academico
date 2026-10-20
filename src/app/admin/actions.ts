@@ -3,10 +3,9 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { createClient, createServiceRoleClient, hasSupabaseServiceRoleConfig } from "@/lib/supabase/server";
+import { TEMPORARY_PASSWORD } from "@/lib/constants";
 
 type AdminActionResult = { ok: true } | { ok: false; error: string };
-
-const TEMPORARY_PASSWORD = "Tec12345!";
 
 const accountSchema = z.object({
   role: z.enum(["alumno", "docente"]),

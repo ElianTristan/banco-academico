@@ -6,6 +6,7 @@ const [
   auth, middleware, portal, actions, base, hardening, loginLookup, authAttempts, accountAuthAttempts, passwordRecoveryUnlock,
   supabaseServer, completeMigration, callback, authForm, registration, newPassword, passwordUpdated, adminActions, managedUserMigration,
   temporaryPasswordMigration,
+  constants,
 ] = await Promise.all([
   read("src/app/auth/actions.ts"), read("src/middleware.ts"), read("src/components/portal.tsx"),
   read("src/app/academic/actions.ts"), read("supabase/migrations/0001_initial_schema.sql"),
@@ -20,6 +21,7 @@ const [
   read("src/app/(auth)/recuperar/actualizada/page.tsx"),
   read("src/app/admin/actions.ts"), read("supabase/migrations/0010_admin_user_lifecycle.sql"),
   read("supabase/migrations/0011_institutional_temporary_password.sql"),
+  read("src/lib/constants.ts"),
 ]);
 const checks = [];
 function check(label, assertion) { assertion(); checks.push(label); }
@@ -170,11 +172,14 @@ check("Las claves nuevas cumplen ocho caracteres, clases y carácter especial", 
   assert.match(authForm, /checks=\{mode === "register" \|\| mode === "new-password"/);
 });
 check("Contraseña temporal institucional Tec12345! configurada solo en backend seguro y asignada en createUser", () => {
-  assert.match(adminActions, /TEMPORARY_PASSWORD\s*=\s*"Tec12345!"/);
+  assert.match(constants, /TEMPORARY_PASSWORD\s*=\s*"Tec12345!"/);
+  assert.match(adminActions, /import\s*\{\s*TEMPORARY_PASSWORD\s*\}\s*from\s*["']@\/lib\/constants["']/);
+  assert.match(auth, /import\s*\{\s*TEMPORARY_PASSWORD\s*\}\s*from\s*["']@\/lib\/constants["']/);
   assert.match(adminActions, /createUser\(\s*\{[\s\S]*?password:\s*TEMPORARY_PASSWORD/);
   assert.match(adminActions, /must_change_password:\s*true/);
   assert.doesNotMatch(adminActions, /insert into.*password/i);
   assert.doesNotMatch(temporaryPasswordMigration, /Tec12345!/);
+  assert.doesNotMatch(authForm, /TEMPORARY_PASSWORD/);
 });
 check("Restricción en servidor exige cambio obligatorio de contraseña temporal antes de acceder al panel", () => {
   assert.match(middleware, /must_change_password/);

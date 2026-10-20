@@ -12,6 +12,7 @@ const [
   authForm,
   completeMigration,
   migration0011,
+  constants,
 ] = await Promise.all([
   read("src/app/admin/actions.ts"),
   read("src/app/auth/actions.ts"),
@@ -21,6 +22,7 @@ const [
   read("src/components/auth-form.tsx"),
   read("supabase/BANCO_ACADEMICO_MIGRACION_COMPLETA.sql"),
   read("supabase/migrations/0011_institutional_temporary_password.sql"),
+  read("src/lib/constants.ts"),
 ]);
 
 const tests = [];
@@ -31,7 +33,8 @@ function test(name, fn) {
 
 // 1. El administrador crea un usuario nuevo con contraseña temporal institucional Tec12345!
 test("1. Admin crea usuario: asigna Tec12345! y must_change_password vía Supabase Auth admin API", () => {
-  assert.match(adminActions, /const TEMPORARY_PASSWORD = "Tec12345!";/);
+  assert.match(constants, /export const TEMPORARY_PASSWORD = "Tec12345!";/);
+  assert.match(adminActions, /import\s*\{\s*TEMPORARY_PASSWORD\s*\}\s*from\s*["']@\/lib\/constants["']/);
   assert.match(adminActions, /service\.auth\.admin\.createUser\(\{[\s\S]*?password:\s*TEMPORARY_PASSWORD/);
   assert.match(adminActions, /user_metadata:\s*\{[\s\S]*?must_change_password:\s*true/);
   assert.match(adminActions, /app_metadata:\s*\{[\s\S]*?must_change_password:\s*true/);
@@ -42,7 +45,7 @@ test("1. Admin crea usuario: asigna Tec12345! y must_change_password vía Supaba
 // 2. El usuario inicia sesión con Tec12345!
 test("2. Inicio de sesión con credenciales y contraseña temporal", () => {
   assert.match(authActions, /signInWithPassword\(\{ email: resolved\.email, password: parsed\.data\.password \}\)/);
-  assert.match(authActions, /const TEMPORARY_PASSWORD = "Tec12345!";/);
+  assert.match(authActions, /import\s*\{\s*TEMPORARY_PASSWORD\s*\}\s*from\s*["']@\/lib\/constants["']/);
 });
 
 // 3. El sistema exige cambiar la contraseña y bloquea acceso al panel en el servidor
