@@ -7,3 +7,8 @@ out/
 !.env.example
 npm-debug.log*
 .DS_Store
+.agents/
+.claude/
+.impeccable/
+skills-lock.json
+CLAUDE.md
