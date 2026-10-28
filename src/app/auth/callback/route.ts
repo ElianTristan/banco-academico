@@ -1,6 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createClient, hasSupabaseConfig } from "@/lib/supabase/server";
 
+export const dynamic = "force-dynamic";
+
 export async function GET(request: NextRequest) {
   if (!hasSupabaseConfig()) {
     return NextResponse.redirect(new URL("/recuperar?error=enlace", request.url));

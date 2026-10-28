@@ -3,6 +3,8 @@ import { createClient } from "@/lib/supabase/server";
 import { Suspense } from "react";
 import { AuthForm } from "@/components/auth-form";
 
+export const dynamic = "force-dynamic";
+
 export default async function NewPassword() {
   const supabase = await createClient();
   const { data: { user }, error } = await supabase.auth.getUser();

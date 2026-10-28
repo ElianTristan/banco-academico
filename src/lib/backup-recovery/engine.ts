@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { createClient, createServiceRoleClient, hasSupabaseServiceRoleConfig } from "@/lib/supabase/server";
+import { createClient, createServiceRoleClient, hasSupabaseConfig, hasSupabaseServiceRoleConfig } from "@/lib/supabase/server";
 import { BACKUP_TABLES, getTableDefinition } from "./database-tables";
 import { createZipArchive, readZipArchive } from "./zip";
 import type {
@@ -92,14 +92,16 @@ export async function getSystemBackupStats(admin: { id: string; email: string })
   );
 
   let bucketAvailable = false;
-  if (hasSupabaseServiceRoleConfig()) {
-    try {
-      const service = createServiceRoleClient();
-      const { data: buckets } = await service.storage.listBuckets();
-      bucketAvailable = Boolean(buckets?.some((b) => b.name === CLOUD_BACKUPS_BUCKET));
-    } catch {
-      bucketAvailable = false;
-    }
+  try {
+    const storageClient = hasSupabaseServiceRoleConfig()
+      ? createServiceRoleClient()
+      : client;
+    const { error: listErr } = await storageClient.storage
+      .from(CLOUD_BACKUPS_BUCKET)
+      .list("", { limit: 1 });
+    bucketAvailable = !listErr;
+  } catch {
+    bucketAvailable = false;
   }
 
   return {
@@ -109,7 +111,7 @@ export async function getSystemBackupStats(admin: { id: string; email: string })
     totalRecords,
     activeAdministrator: admin,
     storageStatus: {
-      cloudConfigured: hasSupabaseServiceRoleConfig(),
+      cloudConfigured: hasSupabaseConfig(),
       bucketAvailable,
     },
   };
@@ -156,15 +158,29 @@ export async function extractDatabaseBackup(
   });
 
   for (const tableDef of tablesToExport) {
-    const { data: rows, error } = await client
-      .from(tableDef.name)
-      .select("*")
-      .order(Array.isArray(tableDef.primaryKey) ? tableDef.primaryKey[0] : tableDef.primaryKey, {
-        ascending: true,
-      });
+    const orderCol = Array.isArray(tableDef.primaryKey)
+      ? tableDef.primaryKey[0]
+      : tableDef.primaryKey;
 
-    if (error) {
-      throw new Error(`Error al extraer datos de la tabla '${tableDef.name}': ${error.message}`);
+    let rows: Record<string, unknown>[] | null = null;
+    let queryError: { message: string } | null = null;
+
+    if (orderCol) {
+      const res = await client
+        .from(tableDef.name)
+        .select("*")
+        .order(orderCol, { ascending: true });
+      rows = res.data;
+      queryError = res.error;
+    }
+
+    if (queryError || !rows) {
+      // Fallback a select sin orden si falla el ordenamiento en base de datos
+      const fallbackRes = await client.from(tableDef.name).select("*");
+      if (fallbackRes.error) {
+        throw new Error(`Error al extraer datos de la tabla '${tableDef.name}': ${fallbackRes.error.message}`);
+      }
+      rows = fallbackRes.data;
     }
 
     const rawRows = (rows ?? []) as Record<string, unknown>[];
@@ -696,26 +712,28 @@ export async function saveCloudBackup(
   filename: string,
   zipBuffer: Buffer
 ): Promise<{ path: string; url?: string }> {
-  if (!hasSupabaseServiceRoleConfig()) {
-    throw new Error("El almacenamiento en la nube requiere configuración administrativa en el servidor.");
-  }
+  const client = hasSupabaseServiceRoleConfig()
+    ? createServiceRoleClient()
+    : await createClient();
 
-  const service = createServiceRoleClient();
-
-  // Asegura la existencia del bucket institucional
-  const { data: buckets } = await service.storage.listBuckets();
-  const exists = buckets?.some((b) => b.name === CLOUD_BACKUPS_BUCKET);
-  if (!exists) {
-    const { error: bucketError } = await service.storage.createBucket(CLOUD_BACKUPS_BUCKET, {
-      public: false,
-      fileSizeLimit: 104857600, // 100MB
-    });
-    if (bucketError && !bucketError.message.includes("already exists")) {
-      throw new Error(`No se pudo crear el bucket institucional de respaldos: ${bucketError.message}`);
+  // Si tenemos credenciales service-role, podemos verificar o crear el bucket si aún no existe
+  if (hasSupabaseServiceRoleConfig()) {
+    try {
+      const service = createServiceRoleClient();
+      const { data: buckets } = await service.storage.listBuckets();
+      const exists = buckets?.some((b) => b.name === CLOUD_BACKUPS_BUCKET);
+      if (!exists) {
+        await service.storage.createBucket(CLOUD_BACKUPS_BUCKET, {
+          public: false,
+          fileSizeLimit: 104857600, // 100MB
+        });
+      }
+    } catch (bucketInitErr) {
+      console.warn("[CLOUD_BACKUPS] Aviso al inicializar bucket en la nube:", bucketInitErr);
     }
   }
 
-  const { data, error } = await service.storage
+  const { data, error } = await client.storage
     .from(CLOUD_BACKUPS_BUCKET)
     .upload(filename, zipBuffer, {
       contentType: "application/zip",
@@ -723,6 +741,11 @@ export async function saveCloudBackup(
     });
 
   if (error) {
+    if (error.message?.toLowerCase().includes("bucket not found") || error.message?.toLowerCase().includes("not found")) {
+      throw new Error(
+        `El contenedor '${CLOUD_BACKUPS_BUCKET}' no existe en Supabase Storage. Un administrador debe crearlo o aplicar la migración 0012 en Supabase.`
+      );
+    }
     throw new Error(`Error al almacenar el respaldo en la nube: ${error.message}`);
   }
 
@@ -733,13 +756,12 @@ export async function saveCloudBackup(
  * Lista los respaldos guardados en el bucket de almacenamiento en la nube institucional.
  */
 export async function listCloudBackups(): Promise<CloudBackupInfo[]> {
-  if (!hasSupabaseServiceRoleConfig()) {
-    return [];
-  }
-
   try {
-    const service = createServiceRoleClient();
-    const { data, error } = await service.storage
+    const client = hasSupabaseServiceRoleConfig()
+      ? createServiceRoleClient()
+      : await createClient();
+
+    const { data, error } = await client.storage
       .from(CLOUD_BACKUPS_BUCKET)
       .list("", { limit: 50, sortBy: { column: "created_at", order: "desc" } });
 
@@ -769,12 +791,11 @@ export async function listCloudBackups(): Promise<CloudBackupInfo[]> {
  * Descarga el contenido binario de un respaldo desde el almacenamiento en la nube.
  */
 export async function downloadCloudBackup(filename: string): Promise<Buffer> {
-  if (!hasSupabaseServiceRoleConfig()) {
-    throw new Error("El almacenamiento en la nube requiere configuración administrativa en el servidor.");
-  }
+  const client = hasSupabaseServiceRoleConfig()
+    ? createServiceRoleClient()
+    : await createClient();
 
-  const service = createServiceRoleClient();
-  const { data, error } = await service.storage.from(CLOUD_BACKUPS_BUCKET).download(filename);
+  const { data, error } = await client.storage.from(CLOUD_BACKUPS_BUCKET).download(filename);
 
   if (error || !data) {
     throw new Error(`No se pudo descargar el respaldo en la nube '${filename}': ${error?.message ?? "Sin datos"}`);

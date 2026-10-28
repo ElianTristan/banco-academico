@@ -168,6 +168,37 @@ export function BackupRecoveryWorkspace() {
     }
   }
 
+  async function handleSaveToExternalDevice(base64: string, filename: string, deviceName: string) {
+    if ("showSaveFilePicker" in window) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const handle = await (window as any).showSaveFilePicker({
+          suggestedName: filename,
+          types: [
+            {
+              description: `Archivo de respaldo para ${deviceName}`,
+              accept: { "application/zip": [".zip"] },
+            },
+          ],
+        });
+        const writable = await handle.createWritable();
+        const binary = atob(base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) {
+          bytes[i] = binary.charCodeAt(i);
+        }
+        await writable.write(bytes);
+        await writable.close();
+      } catch (pickerErr) {
+        if ((pickerErr as Error).name !== "AbortError") {
+          downloadBase64Zip(base64, filename);
+        }
+      }
+    } else {
+      downloadBase64Zip(base64, filename);
+    }
+  }
+
   async function handleStartBackup() {
     setBackupError(null);
     setBackupSuccessResult(null);
@@ -196,38 +227,8 @@ export function BackupRecoveryWorkspace() {
           base64Zip: result.base64Zip,
         });
 
-        // Si es USB o HDD Externo y el navegador soporta File System Access API
-        if (result.base64Zip && (destination === "USB" || destination === "EXTERNAL_HDD")) {
-          if ("showSaveFilePicker" in window) {
-            try {
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              const handle = await (window as any).showSaveFilePicker({
-                suggestedName: result.filename,
-                types: [
-                  {
-                    description: "Archivo de respaldo comprimido ZIP",
-                    accept: { "application/zip": [".zip"] },
-                  },
-                ],
-              });
-              const writable = await handle.createWritable();
-              const binary = atob(result.base64Zip);
-              const bytes = new Uint8Array(binary.length);
-              for (let i = 0; i < binary.length; i++) {
-                bytes[i] = binary.charCodeAt(i);
-              }
-              await writable.write(bytes);
-              await writable.close();
-            } catch (pickerErr) {
-              // Si el usuario cancela o no permite el acceso, descarga estándar
-              if ((pickerErr as Error).name !== "AbortError") {
-                downloadBase64Zip(result.base64Zip, result.filename);
-              }
-            }
-          } else {
-            downloadBase64Zip(result.base64Zip, result.filename);
-          }
-        } else if (result.base64Zip && destination === "LOCAL_STORAGE") {
+        // Para descargas locales o resguardo externo inmediato, transferir archivo
+        if (result.base64Zip && destination !== "CLOUD") {
           downloadBase64Zip(result.base64Zip, result.filename);
         }
 
@@ -673,18 +674,60 @@ export function BackupRecoveryWorkspace() {
                 </div>
 
                 {backupSuccessResult.base64Zip && (
-                  <div style={{ marginTop: 14 }}>
+                  <div style={{ marginTop: 14, display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
+                    {backupSuccessResult.destination === "USB" && (
+                      <button
+                        type="button"
+                        className="button"
+                        onClick={() =>
+                          handleSaveToExternalDevice(
+                            backupSuccessResult.base64Zip!,
+                            backupSuccessResult.filename,
+                            "memoria USB"
+                          )
+                        }
+                        style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "8px 14px" }}
+                      >
+                        <Usb size={15} /> Guardar en memoria USB (selector de carpeta)
+                      </button>
+                    )}
+                    {backupSuccessResult.destination === "EXTERNAL_HDD" && (
+                      <button
+                        type="button"
+                        className="button"
+                        onClick={() =>
+                          handleSaveToExternalDevice(
+                            backupSuccessResult.base64Zip!,
+                            backupSuccessResult.filename,
+                            "disco duro externo"
+                          )
+                        }
+                        style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "8px 14px" }}
+                      >
+                        <HardDrive size={15} /> Guardar en disco externo (selector de carpeta)
+                      </button>
+                    )}
                     <button
                       type="button"
-                      className="button"
+                      className="button button-secondary"
                       onClick={() =>
                         downloadBase64Zip(backupSuccessResult.base64Zip!, backupSuccessResult.filename)
                       }
                       style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "8px 14px" }}
                     >
-                      <Download size={15} /> Descargar archivo ZIP nuevamente
+                      <Download size={15} /> Descargar archivo ZIP
                     </button>
                   </div>
+                )}
+                {backupSuccessResult.destination === "USB" && (
+                  <p style={{ margin: "10px 0 0", fontSize: 11, color: "#166534" }}>
+                    Consejo: Si su navegador no abre el selector directo de unidades, traslade el archivo descargado a su memoria USB para mantener el respaldo físicamente aislado.
+                  </p>
+                )}
+                {backupSuccessResult.destination === "EXTERNAL_HDD" && (
+                  <p style={{ margin: "10px 0 0", fontSize: 11, color: "#166534" }}>
+                    Consejo: Mueva el archivo de respaldo descargado a su disco duro externo para proteger la información ante fallas físicas del servidor.
+                  </p>
                 )}
               </div>
             </div>

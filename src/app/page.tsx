@@ -2,6 +2,8 @@ import { redirect } from "next/navigation";
 import { createClient, hasSupabaseConfig } from "@/lib/supabase/server";
 import { isAppRole, roleHomes } from "@/lib/roles";
 
+export const dynamic = "force-dynamic";
+
 export default async function Home() {
   if (!hasSupabaseConfig()) redirect("/login");
 

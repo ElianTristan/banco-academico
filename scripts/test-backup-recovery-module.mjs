@@ -60,9 +60,16 @@ test("1. Creación y lectura de archivos ZIP con CRC-32 e integridad Deflate", (
 });
 
 // 2. Catálogo de tablas y orden topológico de llaves foráneas
-test("2. Catálogo de 22 tablas y orden topológico estricto", () => {
-  assert.equal(BACKUP_TABLES.length, 22, "Deben existir exactamente 22 tablas catalogadas");
-  assert.equal(TABLE_NAMES.length, 22, "El orden topológico debe cubrir las 22 tablas");
+test("2. Catálogo de tablas y orden topológico estricto con llaves primarias válidas", () => {
+  assert.equal(BACKUP_TABLES.length, 23, "Deben existir exactamente 23 tablas catalogadas");
+  assert.equal(TABLE_NAMES.length, 23, "El orden topológico debe cubrir las 23 tablas");
+
+  // Validación de llaves primarias corregidas
+  const acadSpec = BACKUP_TABLES.find((t) => t.name === "academic_specialties");
+  assert.equal(acadSpec?.primaryKey, "code", "academic_specialties debe tener como PK 'code'");
+
+  const subjSpec = BACKUP_TABLES.find((t) => t.name === "subject_specialties");
+  assert.deepEqual(subjSpec?.primaryKey, ["subject_id", "specialty_code"], "subject_specialties debe tener PK compuesta");
 
   // Perfiles antes que estudiantes y docentes
   const idxProfiles = TABLE_NAMES.indexOf("profiles");
