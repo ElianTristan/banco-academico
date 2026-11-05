@@ -203,14 +203,43 @@ export async function startDirectChat(contactId: string): Promise<ActionResult> 
   return { ok: true, data: { conversationId: data } };
 }
 
-export async function sendChatMessage(conversationId: string, body: string): Promise<ActionResult> {
+export async function createGroupChat(title: string, contactIds: string[]): Promise<ActionResult> {
+  const parsedTitle = z.string().trim().min(2).max(100).safeParse(title);
+  const parsedIds = z.array(idValue).min(2).max(49).safeParse(contactIds);
+  if (!parsedTitle.success || !parsedIds.success || new Set(contactIds).size !== contactIds.length) {
+    return { ok: false, error: "Escribe un nombre y selecciona entre 2 y 49 personas distintas." };
+  }
+  const { supabase, user } = await actor();
+  if (!user) return { ok: false, error: "Inicia sesión para crear un grupo." };
+  const { data, error } = await supabase.rpc("create_group_chat", { target_users: parsedIds.data, target_title: parsedTitle.data });
+  if (error || typeof data !== "string") return { ok: false, error: "No se pudo crear el grupo. Verifica que esté aplicada la migración 0015." };
+  revalidatePath("/admin/mensajes"); revalidatePath("/docente/mensajes"); revalidatePath("/alumno/mensajes");
+  return { ok: true, data: { conversationId: data } };
+}
+
+type ChatAttachmentInput = { path: string; name: string; mime: string; size: number };
+const chatAttachmentMimes = new Set([
+  "application/pdf", "image/jpeg", "image/png", "image/webp", "image/gif", "image/avif",
+  "audio/mpeg", "audio/mp4", "audio/ogg", "audio/wav", "audio/webm",
+  "video/mp4", "video/webm", "video/quicktime",
+]);
+
+export async function sendChatMessage(conversationId: string, body: string, attachment?: ChatAttachmentInput): Promise<ActionResult> {
   if (!idValue.safeParse(conversationId).success) return { ok: false, error: "La conversación seleccionada no es válida." };
-  const message = z.string().trim().min(1).max(4000).safeParse(body);
-  if (!message.success) return { ok: false, error: "Escribe un mensaje de hasta 4,000 caracteres." };
+  const message = z.string().trim().max(4000).safeParse(body);
+  if (!message.success || (!message.data && !attachment)) return { ok: false, error: "Escribe un mensaje o adjunta un archivo; el texto admite hasta 4,000 caracteres." };
+  if (attachment && (!chatAttachmentMimes.has(attachment.mime) || attachment.size < 1 || attachment.size > 25 * 1024 * 1024 || !attachment.path || !attachment.name)) {
+    return { ok: false, error: "El archivo debe ser un formato permitido y pesar máximo 25 MB." };
+  }
   const { supabase, user } = await actor();
   if (!user) return { ok: false, error: "Inicia sesión para enviar mensajes." };
-  const { error } = await supabase.from("chat_messages").insert({ conversation_id: conversationId, sender_id: user.id, body: message.data });
-  if (error) return { ok: false, error: "No se pudo enviar el mensaje. Verifica que seas parte del chat y esté aplicada la migración 0014." };
+  if (attachment && !attachment.path.startsWith(`${user.id}/${conversationId}/`)) return { ok: false, error: "El archivo no pertenece a esta conversación." };
+  const { error } = await supabase.from("chat_messages").insert({
+    conversation_id: conversationId, sender_id: user.id, body: message.data,
+    attachment_path: attachment?.path ?? null, attachment_name: attachment?.name ?? null,
+    attachment_mime: attachment?.mime ?? null, attachment_size: attachment?.size ?? null,
+  });
+  if (error) return { ok: false, error: "No se pudo enviar el mensaje. Verifica que seas parte del chat y esté aplicada la migración 0015." };
   revalidatePath("/admin/mensajes"); revalidatePath("/docente/mensajes"); revalidatePath("/alumno/mensajes");
   return { ok: true };
 }
@@ -220,8 +249,23 @@ export async function loadChatMessages(conversationId: string) {
   const { supabase, user } = await actor();
   if (!user) return { ok: false as const, error: "Inicia sesión para ver tus mensajes.", items: [] };
   const { data, error } = await supabase.rpc("list_chat_messages", { target_conversation: conversationId });
-  if (error) return { ok: false as const, error: "No se pudieron cargar los mensajes. Verifica que esté aplicada la migración 0014.", items: [] };
-  return { ok: true as const, items: data ?? [] };
+  if (error) return { ok: false as const, error: "No se pudieron cargar los mensajes. Verifica que estén aplicadas las migraciones 0014 y 0015.", items: [] };
+  const rows = (data ?? []) as { attachment_path: string | null }[];
+  const paths = rows.flatMap(item => item.attachment_path ? [item.attachment_path] : []);
+  const signedResult = paths.length ? await supabase.storage.from("chat-attachments").createSignedUrls(paths, 3600) : null;
+  const signedByPath = new Map((signedResult?.data ?? []).map(item => [item.path, item.signedUrl]));
+  await supabase.rpc("mark_chat_read", { target_conversation: conversationId });
+  return {
+    ok: true as const,
+    items: rows.map(item => ({ ...item, attachment_url: item.attachment_path ? signedByPath.get(item.attachment_path) ?? null : null })),
+  };
+}
+
+export async function getUnreadChatCount(): Promise<number> {
+  const { supabase, user } = await actor();
+  if (!user) return 0;
+  const { data, error } = await supabase.rpc("count_unread_chat_messages");
+  return error ? 0 : Number(data ?? 0);
 }
 
 export async function reserveAdvisory(sessionId: string): Promise<ActionResult> {
