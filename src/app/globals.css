@@ -1408,3 +1408,6 @@ body{line-height:1.5}
   .header-actions .command-trigger{width:42px;min-width:42px}
   .notification-popover{max-height:calc(100vh - 24px)}
 }
+/* Open search from the upper edge, like the notification panel, instead of under the toolbar. */
+.command-dialog[open]{position:fixed;top:clamp(14px,6vh,56px);left:50%;right:auto;margin:0;transform:translateX(-50%)}
+@media(max-width:600px){.command-dialog[open]{top:12px;max-height:calc(100dvh - 24px)}}
