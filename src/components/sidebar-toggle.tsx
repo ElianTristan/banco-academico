@@ -13,7 +13,9 @@ export function SidebarToggle() {
     setCollapsed(saved);
     const shell = document.querySelector(".app-shell");
     shell?.classList.toggle("sidebar-collapsed", saved);
-    if (saved) document.querySelectorAll<HTMLDetailsElement>(".sidebar .nav-group").forEach(group => { group.open = true; });
+    if (saved || window.matchMedia("(max-width: 900px)").matches) {
+      document.querySelectorAll<HTMLDetailsElement>(".sidebar .nav-group").forEach(group => { group.open = true; });
+    }
     if (!shell) return;
     const observer = new MutationObserver(() => {
       setCollapsed(shell.classList.contains("sidebar-collapsed"));

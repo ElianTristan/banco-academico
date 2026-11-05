@@ -1384,3 +1384,27 @@ body{line-height:1.5}
   .sidebar-toggle>span{display:inline}.main{padding:22px 18px}.header-actions{gap:8px}.portal-breadcrumb{order:5;width:100%;overflow-x:auto;padding:3px 0}.user-action-cards{grid-template-columns:1fr}
 }
 @media(max-width:520px){.notification-popover{position:fixed;top:74px;right:12px}.header-actions>.pill{display:none}.portal-breadcrumb{font-size:11px}.user-action-card{min-height:76px}}
+
+/* Keep the role menu in the logo's clear area on small screens and lift popovers above page tools. */
+.portal-topbar,.header-row{position:relative;z-index:50}
+.portal-topbar .header-actions,.header-row .header-actions{position:relative;z-index:60;flex-wrap:nowrap;min-width:max-content}
+.header-actions>.sidebar-toggle{width:40px;height:40px;min-width:40px;padding:0;font-size:0;flex:none}
+.header-actions>.sidebar-toggle>span{display:none}
+.header-actions .command-trigger{width:min(230px,18vw);min-width:42px}
+.notification-root,.profile-menu-root{z-index:120}
+.notification-popover,.profile-menu-popover{z-index:130}
+.admin-workspace-nav{position:relative;z-index:1}
+.notification-popover{max-height:min(560px,calc(100vh - 24px))}
+.profile-menu-popover{top:auto;bottom:calc(100% + 9px)}
+@media(max-width:900px){
+  .sidebar{display:flex!important;flex-direction:column!important;gap:0!important}
+  .sidebar nav{display:block!important;flex:1 1 auto;min-height:0;overflow-y:auto!important;overscroll-behavior:contain}
+  .sidebar .nav-group{display:block!important}
+  .sidebar .nav-group:not([open])>.nav-item{display:flex!important}
+  .sidebar .nav-group>summary{display:flex!important}
+  .sidebar .institution-logos{flex:none!important}
+  .portal-topbar .header-actions,.header-row .header-actions{flex-wrap:wrap;min-width:0}
+  .portal-breadcrumb{order:6;width:100%;}
+  .header-actions .command-trigger{width:42px;min-width:42px}
+  .notification-popover{max-height:calc(100vh - 24px)}
+}

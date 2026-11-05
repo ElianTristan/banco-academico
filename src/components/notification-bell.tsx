@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Bell, CheckCheck, ClipboardList, Megaphone } from "lucide-react";
 
 type Notice = { id: string; tipo: "tarea" | "anuncio"; titulo: string; mensaje: string; remitente_nombre: string; remitente_rol: string; leida: boolean; fecha_creacion: string };
@@ -22,6 +22,7 @@ export function NotificationBell({ href }: { href: string }) {
   const [open, setOpen] = useState(false);
   const [error, setError] = useState("");
   const root = useRef<HTMLDivElement>(null);
+  const popover = useRef<HTMLElement>(null);
   const refresh = useCallback(async () => {
     try {
       const response = await fetch("/api/notificaciones?limit=10", { cache: "no-store" });
@@ -45,6 +46,18 @@ export function NotificationBell({ href }: { href: string }) {
     return () => { document.removeEventListener("mousedown", outside); document.removeEventListener("keydown", escape); };
   }, []);
 
+  useLayoutEffect(() => {
+    if (!open || !root.current || !popover.current) return;
+    const trigger = root.current.getBoundingClientRect();
+    const panel = popover.current;
+    const top = Math.max(12, trigger.top - panel.offsetHeight - 10);
+    const right = Math.max(12, window.innerWidth - trigger.right);
+    panel.style.position = "fixed";
+    panel.style.top = `${top}px`;
+    panel.style.right = `${right}px`;
+    panel.style.left = "auto";
+  }, [open, payload.items.length]);
+
   async function mark(id?: string) {
     await fetch("/api/notificaciones", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(id ? { id } : { all: true }) });
     await refresh();
@@ -55,7 +68,7 @@ export function NotificationBell({ href }: { href: string }) {
     <button className="notification-trigger" type="button" aria-label={count ? `Notificaciones, ${count} sin leer` : "Notificaciones"} aria-expanded={open} onClick={() => setOpen(value => !value)}>
       <Bell size={19} aria-hidden="true" />{count > 0 && <span className="notification-badge">{count > 9 ? "9+" : count}</span>}
     </button>
-    {open && <section className="notification-popover" aria-label="Notificaciones recientes">
+    {open && <section ref={popover} className="notification-popover" aria-label="Notificaciones recientes">
       <div className="notification-heading"><div><strong>Notificaciones</strong><span>{count} sin leer</span></div><button type="button" onClick={() => void mark()} disabled={!count} aria-label="Marcar todas como leídas"><CheckCheck size={17}/></button></div>
       {error ? <p className="notification-empty" role="alert">{error}</p> : payload.items.length === 0 ? <p className="notification-empty">No tienes notificaciones.</p> : <ul>{payload.items.map(item => {
         const Icon = item.tipo === "tarea" ? ClipboardList : Megaphone;
