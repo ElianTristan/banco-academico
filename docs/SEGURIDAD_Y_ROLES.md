@@ -19,6 +19,20 @@ El esquema conserva los roles actuales `alumno`, `docente` y `administrador`; el
 - Un trigger impide cambiar roles por una petición autenticada directa, incluso si la cuenta es administradora. Solo permite operaciones de rol desde las funciones de confianza o desde el SQL Editor propietario.
 - Los archivos académicos y fotos usan buckets privados. La clave `service_role` no se usa en el navegador.
 
+## Contraseñas y verificación del almacenamiento
+
+- El registro delega el alta a `supabase.auth.signUp`; los cambios y recuperaciones usan `supabase.auth.updateUser`. La aplicación no escribe contraseñas en `public.profiles`, bitácoras o respaldos, ni implementa cifrado reversible propio.
+- Supabase Auth genera un hash bcrypt con sal y lo conserva en `auth.users.encrypted_password`. Aunque la columna se llame `encrypted_password`, el valor es un hash unidireccional: no se puede descifrar para recuperar la contraseña original. La documentación de [seguridad de contraseñas de Supabase](https://supabase.com/docs/guides/auth/password-security) explica el formato y el uso de bcrypt.
+- Para comprobarlo en el proyecto, abre **Supabase Dashboard → SQL Editor** y ejecuta esta consulta. Devuelve solo un conteo; no revela los hashes:
+
+```sql
+select count(*) as cuentas_con_hash_bcrypt
+from auth.users
+where encrypted_password like '$2%';
+```
+
+- El conteo incluye cuentas con contraseña; usuarios que acceden únicamente con proveedores externos pueden no tener un hash. No muestres, exportes ni compartas el contenido de `encrypted_password`, y no lo cambies manualmente.
+
 ## Primer administrador
 
 1. Crea/invita la cuenta desde **Supabase → Authentication → Users** y verifica su correo.

@@ -1,0 +1,20 @@
+import Link from "next/link";
+import { ArrowLeft, BookOpen, HardDriveDownload, KeyRound, LayoutDashboard, Search, ShieldCheck } from "lucide-react";
+import { appInfo } from "@/lib/app-info";
+import { InstitutionalFooter } from "@/components/institutional-footer";
+
+export const metadata = { title: `Manual de usuario | ${appInfo.name}`, description: `Guía rápida de acceso, navegación y respaldo para ${appInfo.name}.` };
+
+export default function ManualPage() {
+  return <main className="manual-page">
+    <header className="manual-header"><Link href="/login" className="manual-back"><ArrowLeft size={16}/> Volver al acceso</Link><span className="eyebrow">{appInfo.name} · v{appInfo.version}</span><h1>Manual de usuario</h1><p>Guía rápida para entrar, navegar y usar las funciones principales de la plataforma.</p><a className="button manual-download" href={appInfo.manualPdfPath} download><BookOpen size={16}/> Descargar guía en PDF</a></header>
+    <div className="manual-content">
+      <section className="manual-section"><KeyRound size={19}/><div><h2>Acceso al sistema</h2><ol><li>En la pantalla de acceso, selecciona el perfil correcto: estudiante, docente o administrador.</li><li>Escribe tu número de control o correo si eres estudiante; número de trabajador o correo si eres docente; usa tu correo institucional si eres administrador.</li><li>Ingresa tu contraseña y selecciona <strong>Iniciar sesión</strong>. El sistema abre solo las secciones permitidas para tu rol.</li><li>Si es tu primer ingreso con contraseña temporal, sigue la indicación para crear una contraseña personal.</li></ol></div></section>
+      <section className="manual-section"><ShieldCheck size={19}/><div><h2>Recuperación de contraseña</h2><ol><li>En el acceso, abre <strong>¿Olvidaste tu contraseña?</strong>.</li><li>Escribe el correo asociado a tu cuenta y solicita el enlace.</li><li>Abre el mensaje enviado por el sistema y sigue el enlace para establecer una contraseña nueva. Si no lo recibes, revisa correo no deseado y confirma con la institución que tu cuenta tenga un correo vigente.</li></ol><p>El personal administrador no puede ver tu contraseña actual.</p></div></section>
+      <section className="manual-section"><LayoutDashboard size={19}/><div><h2>Navegación</h2><ol><li>Usa la barra lateral para abrir las funciones disponibles para tu perfil.</li><li>La navegación rápida está disponible en el botón <strong>Buscar</strong> o con <strong>⌘ K</strong> en Mac y <strong>Ctrl K</strong> en Windows.</li><li>Abre tu perfil para consultar tus datos personales y preferencias. Cierra sesión al terminar, especialmente en equipos compartidos.</li></ol></div></section>
+      <section className="manual-section"><HardDriveDownload size={19}/><div><h2>Respaldos y recuperación</h2><p>Estas funciones son exclusivas de administradores y se encuentran en Herramientas. En <strong>Respaldos</strong>, revisa el alcance del archivo antes de generarlo; las tablas exportadas se describen en la misma pantalla. El navegador no puede comprobar conexión ni espacio disponible de una unidad USB o disco externo.</p><p>La opción <strong>Recuperación</strong> valida un archivo y combina o actualiza registros. No equivale a una sustitución exacta ni elimina registros que falten en el respaldo. Lee la advertencia del módulo y conserva una copia preventiva.</p></div></section>
+      <section className="manual-section"><Search size={19}/><div><h2>Ayuda y soporte</h2><p>Usa los enlaces institucionales del pie de página. El correo de soporte y las cuentas sociales se mostrarán cuando la institución confirme sus direcciones oficiales.</p></div></section>
+    </div>
+    <InstitutionalFooter/>
+  </main>;
+}

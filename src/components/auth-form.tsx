@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Eye, EyeOff } from "lucide-react";
 import { requestPasswordReset, signIn, signUp, updatePassword, signOut } from "@/app/auth/actions";
+import { appInfo } from "@/lib/app-info";
 
 type Mode = "login" | "register" | "reset" | "new-password";
 type AppRole = "alumno" | "docente" | "administrador";
@@ -60,7 +61,7 @@ export function AuthForm({ mode }: { mode: Mode }) {
   const isPasswordSecure = passwordChecks.every((check) => check.valid);
 
   return <form action={action} className="auth-form motion-form">
-    <div className="auth-form-head"><span className="eyebrow">Banco Académico</span><h1>{title}</h1><p className="muted">{mode === "login" ? "Accede a tu espacio académico." : mode === "register" ? "Regístrate para consultar tu información académica." : mode === "reset" ? "Te enviaremos un enlace a tu correo." : "Elige una contraseña segura para continuar."}</p></div>
+    <div className="auth-form-head"><span className="eyebrow">{appInfo.name}</span><h1>{title}</h1><p className="muted">{mode === "login" ? "Accede a tu espacio académico." : mode === "register" ? "Regístrate para consultar tu información académica." : mode === "reset" ? "Te enviaremos un enlace a tu correo." : "Elige una contraseña segura para continuar."}</p></div>
     {failedAttempt
       ? <p className="form-error auth-attempt-message" role="alert">Intento {attempt} de 3. Verifica tu correo y contraseña.</p>
       : error && <p className="form-error" role="alert">{messages[error] ?? "Ocurrió un problema. Inténtalo de nuevo."}</p>}

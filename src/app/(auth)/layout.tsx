@@ -1,11 +1,33 @@
 import Link from "next/link";
-import Image from "next/image";
-import { visualAssets } from "@/lib/visual-assets";
-import { RemotePhoto } from "@/components/remote-photo";
-import { PageTransition } from "@/components/page-transition";
+import { LockKeyhole } from "lucide-react";
 import { BrandLockup } from "@/components/brand-lockup";
-import { SessionIntro } from "@/components/session-intro";
+import { InstitutionalFooter } from "@/components/institutional-footer";
+import { PageTransition } from "@/components/page-transition";
+import { appInfo } from "@/lib/app-info";
 
-export default function AuthLayout({children}:{children:React.ReactNode}) {
-  return <SessionIntro><PageTransition className="auth-page-shell"><main className="auth-shell"><aside className="auth-side"><RemotePhoto className="auth-photo" src={visualAssets.classroom} sizes="(max-width: 760px) 100vw, 52vw" priority alt="Docente comparte una clase con estudiantes en un aula universitaria iluminada"/><div className="auth-photo-tint"/><div className="auth-side-top"><Link className="brand" href="/" aria-label="Banco Académico, inicio"><BrandLockup size="compact"/></Link><div className="auth-institution-logos" aria-label="Instituto Tecnológico de San Luis Potosí y Tecnológico Nacional de México"><span><Image src="/brand/itslp.png" alt="ITSLP" width={299} height={280}/></span><span><Image src="/brand/tecnm.png" alt="TecNM" width={447} height={447}/></span></div></div><div className="auth-quote"><span className="auth-quote-rule"/><p className="auth-quote-label">Una comunidad que aprende compartiendo</p><h2>Tu siguiente idea puede empezar aquí.</h2><p>Consulta tus materias, encuentra recursos y mantente cerca de tu comunidad académica.</p><div className="auth-photo-credit">Fotografía de aula · <a href="https://unsplash.com/photos/teacher-lecturing-students-in-a-classroom-setting-vBg0dxwfIYM" target="_blank" rel="noreferrer">Unsplash</a></div></div><div className="auth-foot"><span>Instituto Tecnológico de San Luis Potosí</span><span>TecNM</span></div></aside><section className="auth-main"><div className="auth-mobile-brand"><BrandLockup size="compact"/><div className="auth-institution-logos"><span><Image src="/brand/itslp.png" alt="ITSLP" width={299} height={280}/></span><span><Image src="/brand/tecnm.png" alt="TecNM" width={447} height={447}/></span></div></div><div className="auth-card">{children}</div></section></main></PageTransition></SessionIntro>;
+export default function AuthLayout({ children }: { children: React.ReactNode }) {
+  return <PageTransition className="auth-page-shell">
+    <div className="auth-layout">
+      <main className="auth-main">
+        <header className="auth-brand-row">
+          <Link className="auth-brand-link" href="/login" aria-label={`${appInfo.name}, acceso`}><BrandLockup size="compact"/></Link>
+          <span className="auth-secure-label"><LockKeyhole size={14} aria-hidden="true"/> Acceso institucional</span>
+        </header>
+        <section className="auth-card">{children}</section>
+      </main>
+      <aside className="auth-info-panel" aria-label="Información del sistema">
+        <span className="auth-info-kicker">Plataforma académica</span>
+        <h2>{appInfo.name}</h2>
+        <p className="auth-info-institution">{appInfo.institution}</p>
+        <dl className="auth-info-list">
+          <div><dt>Versión</dt><dd>{appInfo.version}</dd></div>
+          <div><dt>Pantalla</dt><dd>{appInfo.moduleName}</dd></div>
+          <div><dt>Equipo</dt><dd>{appInfo.teamName}</dd></div>
+          <div><dt>Interfaz actualizada</dt><dd>{appInfo.interfaceUpdatedAt}</dd></div>
+        </dl>
+        <p className="auth-info-note">Consulta materias, recursos y servicios académicos desde el espacio correspondiente a tu perfil.</p>
+      </aside>
+      <InstitutionalFooter variant="auth"/>
+    </div>
+  </PageTransition>;
 }

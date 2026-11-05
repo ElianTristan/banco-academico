@@ -12,3 +12,4 @@ npm-debug.log*
 .impeccable/
 skills-lock.json
 CLAUDE.md
+.vercel

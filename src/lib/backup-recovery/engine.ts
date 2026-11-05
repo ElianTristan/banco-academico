@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { appInfo } from "@/lib/app-info";
 import { createClient, createServiceRoleClient, hasSupabaseConfig, hasSupabaseServiceRoleConfig } from "@/lib/supabase/server";
 import { BACKUP_TABLES, getTableDefinition } from "./database-tables";
 import { createZipArchive, readZipArchive } from "./zip";
@@ -17,7 +18,7 @@ import type {
 } from "./types";
 
 export const BACKUP_FORMAT_VERSION = "1.0.0";
-export const BACKUP_SYSTEM_NAME = "Banco Académico";
+export const BACKUP_SYSTEM_NAME = appInfo.name;
 export const CLOUD_BACKUPS_BUCKET = "institutional-backups";
 
 /**
@@ -158,32 +159,25 @@ export async function extractDatabaseBackup(
   });
 
   for (const tableDef of tablesToExport) {
-    const orderCol = Array.isArray(tableDef.primaryKey)
-      ? tableDef.primaryKey[0]
-      : tableDef.primaryKey;
+    const orderCols = Array.isArray(tableDef.primaryKey)
+      ? tableDef.primaryKey
+      : [tableDef.primaryKey];
 
-    let rows: Record<string, unknown>[] | null = null;
-    let queryError: { message: string } | null = null;
-
-    if (orderCol) {
-      const res = await client
-        .from(tableDef.name)
-        .select("*")
-        .order(orderCol, { ascending: true });
-      rows = res.data;
-      queryError = res.error;
-    }
-
-    if (queryError || !rows) {
-      // Fallback a select sin orden si falla el ordenamiento en base de datos
-      const fallbackRes = await client.from(tableDef.name).select("*");
-      if (fallbackRes.error) {
-        throw new Error(`Error al extraer datos de la tabla '${tableDef.name}': ${fallbackRes.error.message}`);
+    const rawRows: Record<string, unknown>[] = [];
+    const pageSize = 1000;
+    for (let offset = 0; ; offset += pageSize) {
+      let pageQuery = client.from(tableDef.name).select("*");
+      for (const orderCol of orderCols) {
+        if (orderCol) pageQuery = pageQuery.order(orderCol, { ascending: true });
       }
-      rows = fallbackRes.data;
+      const page = await pageQuery.range(offset, offset + pageSize - 1);
+      if (page.error) {
+        throw new Error(`Error al extraer datos de la tabla '${tableDef.name}': ${page.error.message}`);
+      }
+      const pageRows = (page.data ?? []) as Record<string, unknown>[];
+      rawRows.push(...pageRows);
+      if (pageRows.length < pageSize) break;
     }
-
-    const rawRows = (rows ?? []) as Record<string, unknown>[];
 
     // Sanitización: si la tabla tiene allowedFields, conservamos únicamente los permitidos
     const sanitizedRows = rawRows.map((row) => {
@@ -230,7 +224,7 @@ export async function extractDatabaseBackup(
     created_by: admin,
     backup_type: options.scope,
     destination: options.destination,
-    app_version: "1.0.0",
+    app_version: appInfo.version,
     database_schema_version: "0011",
     total_records: totalRecords,
     tables: tablesMetadata,
@@ -496,14 +490,8 @@ export async function executeDatabaseRestore(
     preRestoreSize = preBackup.sizeFormatted;
     preRestoreChecksum = preBackup.overallSha256;
 
-    // Si la nube está disponible, guarda una copia de seguridad en el bucket
-    if (hasSupabaseServiceRoleConfig()) {
-      try {
-        await saveCloudBackup(preRestoreFilename, preBackup.zipBuffer);
-      } catch (cloudErr) {
-        console.warn("[RESTORE] No se pudo subir el pre-respaldo a la nube, continuando localmente:", cloudErr);
-      }
-    }
+    // No modificar la base si la copia preventiva no quedó durablemente guardada.
+    await saveCloudBackup(preRestoreFilename, preBackup.zipBuffer);
   } catch (preBackupError) {
     return {
       ok: false,
@@ -582,8 +570,10 @@ export async function executeDatabaseRestore(
 
   const durationMs = Date.now() - startTime;
 
+  const verified = verificationReport.overallStatus === "COMPLETADO_EXITOSO" && verificationReport.checksFailed === 0;
   return {
-    ok: true,
+    ok: verified,
+    error: verified ? undefined : "La escritura terminó, pero la verificación encontró problemas. Los cambios pueden ser parciales; revisa el informe y el respaldo preventivo antes de continuar.",
     operationId: manifest.backup_id,
     preRestoreBackupFilename: preRestoreFilename,
     preRestoreBackupSize: preRestoreSize,
@@ -629,8 +619,8 @@ export async function verifyDatabaseIntegrity(manifest: BackupManifest): Promise
       }
 
       const foundCount = count ?? 0;
-      // En un upsert puede haber registros iguales o mayores si la base tenía datos previos
-      const isCountConsistent = foundCount >= expectedMeta.count;
+      // La restauración actual combina/upserta; un conteo superior significa que quedaron filas extra.
+      const isCountConsistent = foundCount === expectedMeta.count;
 
       if (!isCountConsistent) {
         items.push({
@@ -640,7 +630,7 @@ export async function verifyDatabaseIntegrity(manifest: BackupManifest): Promise
           expectedCount: expectedMeta.count,
           foundCount,
           integrityVerified: false,
-          message: `Se encontraron menos registros (${foundCount}) de los declarados en el respaldo (${expectedMeta.count}).`,
+          message: `El conteo actual es ${foundCount} y el respaldo declara ${expectedMeta.count}; no se puede confirmar una sustitución exacta.`,
         });
         checksFailed++;
       } else {
@@ -651,7 +641,7 @@ export async function verifyDatabaseIntegrity(manifest: BackupManifest): Promise
           expectedCount: expectedMeta.count,
           foundCount,
           integrityVerified: true,
-          message: `Integridad comprobada: ${foundCount} registros accesibles y consistentes.`,
+          message: `Conteo exacto observado: ${foundCount} registros. Esto no verifica igualdad de contenido fila por fila.`,
         });
         checksPassed++;
       }

@@ -14,7 +14,7 @@ export interface TableBackupMetadata {
 }
 
 export interface BackupManifest {
-  system: "Banco Académico";
+  system: string;
   format_version: "1.0.0";
   backup_id: string;
   created_at: string;

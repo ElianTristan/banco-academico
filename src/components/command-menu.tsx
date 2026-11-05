@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { ArrowRight, Command, Search } from "lucide-react";
 import type { AppRole } from "@/lib/roles";
 import { searchAdminDirectory } from "@/app/academic/actions";
+import { appInfo } from "@/lib/app-info";
 
 const destinations:Record<AppRole,{label:string;href:string;group:string}[]>={
   alumno:[
@@ -15,7 +16,7 @@ const destinations:Record<AppRole,{label:string;href:string;group:string}[]>={
     {label:"Inicio",href:"/docente",group:"General"},{label:"Mis grupos",href:"/docente/grupos",group:"Académico"},{label:"Mis materias",href:"/docente/materias",group:"Académico"},{label:"Alumnos",href:"/docente/alumnos",group:"Académico"},{label:"Calificaciones",href:"/docente/calificaciones",group:"Académico"},{label:"Horario",href:"/docente/horario",group:"Académico"},{label:"Compartir material",href:"/docente/subir",group:"Biblioteca"},{label:"Mis materiales",href:"/docente/mis-materiales",group:"Biblioteca"},{label:"Asesorías",href:"/docente/asesorias",group:"Comunidad"},{label:"Avisos",href:"/docente/avisos",group:"Comunidad"},{label:"Estadísticas",href:"/docente/estadisticas",group:"Gestión"},{label:"Perfil",href:"/docente/perfil",group:"Cuenta"},
   ],
   administrador:[
-    {label:"Inicio",href:"/admin",group:"Administración"},{label:"Usuarios",href:"/admin/usuarios",group:"Directorio"},{label:"Alumnos",href:"/admin/alumnos",group:"Directorio"},{label:"Docentes",href:"/admin/docentes",group:"Directorio"},{label:"Solicitudes docentes",href:"/admin/solicitudes",group:"Accesos"},{label:"Materias",href:"/admin/materias",group:"Académico"},{label:"Carreras",href:"/admin/carreras",group:"Académico"},{label:"Grupos",href:"/admin/grupos",group:"Académico"},{label:"Calificaciones",href:"/admin/calificaciones",group:"Académico"},{label:"Periodos",href:"/admin/periodos",group:"Académico"},{label:"Biblioteca y revisión",href:"/admin/materiales",group:"Operación"},{label:"Asesorías",href:"/admin/asesorias",group:"Operación"},{label:"Avisos",href:"/admin/avisos",group:"Operación"},{label:"Reportes",href:"/admin/reportes",group:"Operación"},{label:"Bitácora",href:"/admin/bitacora",group:"Seguridad"},{label:"Accesos",href:"/admin/accesos",group:"Seguridad"},{label:"Configuración",href:"/admin/configuracion",group:"Administración"},{label:"Respaldos",href:"/admin/respaldos",group:"Seguridad"},{label:"Perfil",href:"/admin/perfil",group:"Cuenta"},
+    {label:"Inicio",href:"/admin",group:"Administración"},{label:"Herramientas",href:"/admin/herramientas",group:"Administración"},{label:"Usuarios",href:"/admin/usuarios",group:"Directorio"},{label:"Alumnos",href:"/admin/alumnos",group:"Directorio"},{label:"Docentes",href:"/admin/docentes",group:"Directorio"},{label:"Solicitudes docentes",href:"/admin/solicitudes",group:"Accesos"},{label:"Materias",href:"/admin/materias",group:"Académico"},{label:"Carreras",href:"/admin/carreras",group:"Académico"},{label:"Grupos",href:"/admin/grupos",group:"Académico"},{label:"Calificaciones",href:"/admin/calificaciones",group:"Académico"},{label:"Periodos",href:"/admin/periodos",group:"Académico"},{label:"Biblioteca y revisión",href:"/admin/materiales",group:"Operación"},{label:"Asesorías",href:"/admin/asesorias",group:"Operación"},{label:"Avisos",href:"/admin/avisos",group:"Operación"},{label:"Reportes",href:"/admin/reportes",group:"Operación"},{label:"Bitácora",href:"/admin/bitacora",group:"Seguridad"},{label:"Accesos",href:"/admin/accesos",group:"Seguridad"},{label:"Configuración",href:"/admin/configuracion",group:"Administración"},{label:"Respaldos",href:"/admin/respaldos",group:"Seguridad"},{label:"Recuperación",href:"/admin/recuperacion",group:"Seguridad"},{label:"Historial de respaldos",href:"/admin/historial-respaldos",group:"Seguridad"},{label:"Perfil",href:"/admin/perfil",group:"Cuenta"},
   ],
 };
 
@@ -56,18 +57,18 @@ export function CommandMenu({role}:{role:AppRole}){
   useEffect(()=>{setOpen(false);setQuery("");},[pathname]);
 
   return <>
-    <button className="command-trigger" type="button" aria-haspopup="dialog" aria-expanded={open} onClick={()=>{setQuery("");setOpen(true);}}>
-      <Search size={15}/><span>Ir a…</span><kbd><Command size={11}/> K</kbd>
+    <button className="command-trigger" type="button" aria-label="Buscar personas, secciones y herramientas" aria-haspopup="dialog" aria-expanded={open} onClick={()=>{setQuery("");setOpen(true);}}>
+      <Search size={16}/><span>Buscar estudiantes, docentes, módulos…</span><kbd><Command size={11}/> K</kbd>
     </button>
     <dialog ref={dialogRef} className="command-dialog" aria-label="Navegación rápida" onClose={()=>setOpen(false)} onClick={event=>{if(event.target===dialogRef.current)setOpen(false);}}>
-      <div className="command-search"><Search size={18}/><input ref={inputRef} value={query} onChange={event=>setQuery(event.target.value)} placeholder="Buscar una sección…" aria-label="Buscar secciones" onKeyDown={event=>{if(event.key==="Escape")setOpen(false);}}/><kbd>ESC</kbd></div>
+      <div className="command-search"><Search size={18}/><input ref={inputRef} value={query} onChange={event=>setQuery(event.target.value)} placeholder={role==="administrador"?"Buscar personas, carreras, materias o herramientas…":"Buscar una sección…"} aria-label="Buscar secciones" onKeyDown={event=>{if(event.key==="Escape")setOpen(false);}}/><kbd>ESC</kbd></div>
       <div className="command-results" role="list" aria-label="Secciones y resultados">
         {filtered.map(item=><Link aria-current={pathname===item.href?"page":undefined} key={item.href} href={item.href} onClick={()=>setOpen(false)}><span className="command-result-group">{item.group}</span><span>{item.label}</span><ArrowRight size={15}/></Link>)}
         {directoryItems.map((item,index)=><Link aria-current={pathname===item.href?"page":undefined} key={`${item.kind}-${item.href}-${index}`} href={item.href} onClick={()=>setOpen(false)}><span className="command-result-group">{item.kind}</span><span className="command-directory-result"><strong>{item.title}</strong><small>{item.detail}</small></span><ArrowRight size={15}/></Link>)}
         {searching&&<p className="command-empty" role="status">Buscando en el directorio académico…</p>}
         {!searching&&!filtered.length&&!directoryItems.length&&<p className="command-empty">No encontramos resultados.</p>}
       </div>
-      <footer><span><kbd>⌘</kbd> <kbd>K</kbd> para abrir</span><span>Banco Académico</span></footer>
+      <footer><span><kbd>⌘</kbd> <kbd>K</kbd> para abrir</span><span>{appInfo.name}</span></footer>
     </dialog>
   </>;
 }

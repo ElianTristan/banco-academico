@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useTransition, type ChangeEvent } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import {
   Database,
   HardDriveDownload,
@@ -38,18 +39,19 @@ import type {
   RestoreExecutionResult,
   ValidationResult,
 } from "@/lib/backup-recovery/types";
+import { appInfo } from "@/lib/app-info";
 
 type WorkspaceTab = "respaldo" | "recuperacion" | "historial";
 
 const destinationLabels: Record<BackupDestination, { label: string; desc: string; icon: typeof Usb }> = {
   USB: {
     label: "Unidad USB",
-    desc: "Almacenamiento en memoria flash USB extraíble conectada al equipo.",
+    desc: "El navegador permite descargar el archivo y elegir una ubicación; no puede confirmar que sea USB.",
     icon: Usb,
   },
   EXTERNAL_HDD: {
     label: "Disco duro externo",
-    desc: "Unidad de disco externa conectada y aislada físicamente del servidor.",
+    desc: "Descarga para guardar manualmente en una unidad externa; conexión y espacio no verificables por el navegador.",
     icon: HardDrive,
   },
   CLOUD: {
@@ -66,22 +68,22 @@ const destinationLabels: Record<BackupDestination, { label: string; desc: string
 
 const scopeLabels: Record<BackupScope, { label: string; desc: string }> = {
   FULL: {
-    label: "Base de datos completa (Recomendado)",
-    desc: "Catálogos, carreras, materias, perfiles, docentes, alumnos, grupos, calificaciones y bitácora.",
+    label: "Datos de aplicación disponibles",
+    desc: "Tablas públicas incluidas en el manifiesto. No incluye cuentas de autenticación, archivos binarios ni esquema SQL.",
   },
   ACADEMIC_ONLY: {
     label: "Solo registros académicos",
     desc: "Materias, carreras, periodos, alumnos, docentes, grupos, horarios y calificaciones.",
   },
   WITH_AUDIT_LOGS: {
-    label: "Completo con bitácora forense",
-    desc: "Incluye registros históricos de auditoría y accesos además de todos los datos institucionales.",
+    label: "Datos de aplicación y bitácoras",
+    desc: "Incluye las tablas de auditoría configuradas. No incluye cuentas de autenticación, archivos binarios ni esquema SQL.",
   },
 };
 
-export function BackupRecoveryWorkspace() {
+export function BackupRecoveryWorkspace({ view = "respaldo" }: { view?: WorkspaceTab }) {
   const router = useRouter();
-  const [activeTab, setActiveTab] = useState<WorkspaceTab>("respaldo");
+  const activeTab = view;
   const [overview, setOverview] = useState<BackupOverviewData | null>(null);
   const [loadingOverview, setLoadingOverview] = useState(true);
   const [overviewError, setOverviewError] = useState<string | null>(null);
@@ -413,32 +415,17 @@ export function BackupRecoveryWorkspace() {
         </div>
       )}
 
-      {/* Pestañas de navegación de primer nivel */}
-      <nav className="backup-tabs" aria-label="Navegación del módulo de respaldo">
-        <button
-          type="button"
-          className={`backup-tab-button ${activeTab === "respaldo" ? "is-active" : ""}`}
-          onClick={() => setActiveTab("respaldo")}
-        >
-          <HardDriveDownload size={16} />
-          <span>1. Respaldo de información</span>
-        </button>
-        <button
-          type="button"
-          className={`backup-tab-button ${activeTab === "recuperacion" ? "is-active" : ""}`}
-          onClick={() => setActiveTab("recuperacion")}
-        >
-          <RotateCcw size={16} />
-          <span>2. Recuperación de información</span>
-        </button>
-        <button
-          type="button"
-          className={`backup-tab-button ${activeTab === "historial" ? "is-active" : ""}`}
-          onClick={() => setActiveTab("historial")}
-        >
-          <ShieldCheck size={16} />
-          <span>3. Bitácora e historial</span>
-        </button>
+      {/* Navegación independiente por ruta */}
+      <nav className="backup-tabs" aria-label="Navegación de respaldo y recuperación">
+        <Link href="/admin/respaldos" aria-current={activeTab === "respaldo" ? "page" : undefined} className={`backup-tab-button ${activeTab === "respaldo" ? "is-active" : ""}`}>
+          <HardDriveDownload size={16} /><span>Respaldos</span>
+        </Link>
+        <Link href="/admin/recuperacion" aria-current={activeTab === "recuperacion" ? "page" : undefined} className={`backup-tab-button ${activeTab === "recuperacion" ? "is-active" : ""}`}>
+          <RotateCcw size={16} /><span>Recuperación</span>
+        </Link>
+        <Link href="/admin/historial-respaldos" aria-current={activeTab === "historial" ? "page" : undefined} className={`backup-tab-button ${activeTab === "historial" ? "is-active" : ""}`}>
+          <ShieldCheck size={16} /><span>Historial</span>
+        </Link>
       </nav>
 
       {/* PESTAÑA 1: RESPALDO DE INFORMACIÓN */}
@@ -458,10 +445,9 @@ export function BackupRecoveryWorkspace() {
             <div>
               <strong>Propósito del respaldo institucional</strong>
               <p style={{ margin: "4px 0 0" }}>
-                El respaldo permite generar una copia de seguridad de la información de Banco Académico para proteger
-                los datos ante errores, pérdidas de información o incidentes técnicos. Se recomienda realizar los
-                respaldos en horarios de baja actividad o fuera del horario de uso del sistema.
+                Opción de respaldo: el respaldo guarda una copia de la información del sistema para poder recuperarla en caso de pérdida o error. Se recomienda realizarlo en horas fuera de uso del sistema.
               </p>
+              <p className="backup-scope-note">El archivo incluye las tablas de aplicación configuradas. No incluye el esquema SQL, cuentas de Supabase Auth ni los archivos binarios almacenados en Storage.</p>
             </div>
           </div>
 
@@ -472,9 +458,7 @@ export function BackupRecoveryWorkspace() {
               <strong>Aislamiento físico y seguridad del medio de almacenamiento</strong>
               <p style={{ margin: "4px 0 0" }}>
                 <strong>Importante:</strong> Para garantizar la continuidad ante una avería total del hardware o
-                corrupción de disco, no conserve el único respaldo en el mismo disco físico que aloja el servidor o la
-                aplicación. Utilice siempre una <strong>Unidad USB</strong>, un <strong>Disco duro externo</strong> o el{" "}
-                <strong>Almacenamiento en la nube</strong> institucional.
+                corrupción de disco, no conserve el único respaldo en el mismo disco físico que aloja el servidor. La descarga USB/disco se guarda mediante el navegador y el sitio no puede detectar conexión ni espacio disponible. La nube institucional sí se guarda en Supabase Storage cuando está configurada.
               </p>
             </div>
           </div>
@@ -572,7 +556,7 @@ export function BackupRecoveryWorkspace() {
             >
               <div>
                 <span style={{ color: "#6b7a90", display: "block" }}>Sistema y entorno:</span>
-                <strong>Banco Académico (ITSLP)</strong>
+                <strong>{appInfo.name} (ITSLP)</strong>
               </div>
               <div>
                 <span style={{ color: "#6b7a90", display: "block" }}>Destino identificado:</span>
@@ -613,10 +597,9 @@ export function BackupRecoveryWorkspace() {
             <div className="backup-alert backup-alert-success" style={{ marginTop: 18 }}>
               <CheckCircle2 size={20} />
               <div style={{ width: "100%" }}>
-                <strong style={{ fontSize: 14 }}>¡Respaldo institucional generado exitosamente!</strong>
+                <strong style={{ fontSize: 14 }}>Archivo de respaldo generado.</strong>
                 <p style={{ margin: "4px 0 10px" }}>
-                  Se ha extraído, saneado y verificado la base de datos completa. El paquete comprimido ZIP contiene el
-                  manifiesto oficial con firmas SHA-256 independientes por tabla.
+                  Se generó un ZIP con las tablas de aplicación configuradas y sus hashes SHA-256. No contiene esquema SQL, usuarios de Supabase Auth ni archivos binarios de Storage.
                 </p>
 
                 <div
@@ -639,7 +622,7 @@ export function BackupRecoveryWorkspace() {
                     <strong>{backupSuccessResult.sizeFormatted}</strong>
                   </div>
                   <div>
-                    <span style={{ color: "#295b45" }}>Destino confirmado:</span>
+                    <span style={{ color: "#295b45" }}>Destino seleccionado:</span>
                     <br />
                     <strong>{destinationLabels[backupSuccessResult.destination].label}</strong>
                   </div>
@@ -766,10 +749,7 @@ export function BackupRecoveryWorkspace() {
             <div>
               <strong style={{ fontSize: 14 }}>ADVERTENCIA CRÍTICA DEL SISTEMA</strong>
               <p style={{ margin: "4px 0 0" }}>
-                ADVERTENCIA: La recuperación puede sustituir información actual por los datos contenidos en el respaldo
-                seleccionado. Esta operación podría provocar la pérdida de cambios posteriores a la fecha del respaldo.
-                Se recomienda realizarla exclusivamente en un horario en el que ningún usuario esté utilizando el
-                sistema. Antes de continuar, genera y verifica un respaldo de seguridad del estado actual.
+                Esta herramienta combina los registros del respaldo con la base actual mediante inserciones y actualizaciones. No elimina registros ausentes del archivo ni revierte automáticamente cambios parciales; por tanto, no equivale a una sustitución completa. Puede sobrescribir campos coincidentes. No continúes si necesitas una restauración exacta.
               </p>
             </div>
           </div>
@@ -1051,7 +1031,7 @@ export function BackupRecoveryWorkspace() {
                 Paso 2 · Medida preventiva y confirmación obligatoria
               </span>
               <h3 style={{ margin: "4px 0 8px", fontSize: 14, color: "#7f1d1d" }}>
-                Garantía de salvaguarda y sustitución de datos
+                Respaldo preventivo y confirmación obligatoria
               </h3>
 
               <div
@@ -1067,15 +1047,13 @@ export function BackupRecoveryWorkspace() {
               >
                 <ShieldCheck size={20} style={{ flexShrink: 0, marginTop: 2, color: "#16a34a" }} />
                 <div>
-                  <strong>Salvaguarda previa automática:</strong> Antes de aplicar cualquier cambio a la base de datos,
-                  el sistema generará automáticamente una copia íntegra del estado actual (
-                  <code>BancoAcademico_PreRestauracion_...zip</code>). Si el proceso experimentara algún inconveniente,
-                  podrá restaurar dicho punto de recuperación.
+                  <strong>Salvaguarda previa automática:</strong> Antes de aplicar cambios, el sistema generará una copia de los datos incluidos en el módulo y exigirá que se guarde en la nube institucional (
+                  <code>BancoAcademico_PreRestauracion_...zip</code>). Esta operación no es una reversión automática; conserva el archivo preventivo para recuperación manual.
                 </div>
               </div>
 
               <label style={{ display: "block", fontSize: 13, fontWeight: 700, color: "#991b1b", marginBottom: 6 }}>
-                Escribe textualmente la palabra &quot;RESTAURAR&quot; para autorizar la sustitución de datos:
+                Escribe textualmente la palabra &quot;RESTAURAR&quot; para confirmar la operación de combinación y actualización:
               </label>
               <div style={{ display: "flex", gap: 10, alignItems: "center", maxWidth: 360 }}>
                 <input
@@ -1137,7 +1115,7 @@ export function BackupRecoveryWorkspace() {
           )}
 
           {/* PASO 3: Reporte de verificación post-restauración */}
-          {restoreResult && restoreResult.ok && restoreResult.verificationReport && (
+          {restoreResult && restoreResult.verificationReport && (
             <div style={{ marginTop: 24 }}>
               <div className="backup-alert backup-alert-success">
                 <CheckCircle2 size={24} />

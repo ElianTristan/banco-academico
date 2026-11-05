@@ -15,8 +15,8 @@ async function actor() {
   if (user.app_metadata?.must_change_password === true || user.user_metadata?.must_change_password === true) {
     return { supabase, user: null, role: null };
   }
-  const { data } = await supabase.from("profiles").select("role").eq("id", user.id).maybeSingle();
-  return { supabase, user, role: data?.role as string | null };
+  const { data } = await supabase.from("profiles").select("role,is_active").eq("id", user.id).maybeSingle();
+  return { supabase, user: data?.is_active === true ? user : null, role: data?.role as string | null };
 }
 
 export async function searchAdminDirectory(query: string) {
@@ -25,19 +25,23 @@ export async function searchAdminDirectory(query: string) {
   const { supabase, user, role } = await actor();
   if (!user || role !== "administrador") return { ok: false as const, items: [] as { title: string; detail: string; href: string; kind: string }[] };
   const pattern = `%${term}%`;
-  const [profiles, students, teachers, subjects, groups] = await Promise.all([
-    supabase.from("profiles").select("id,first_name,last_name,email,role").or(`first_name.ilike.${pattern},last_name.ilike.${pattern},email.ilike.${pattern}`).limit(6),
+  const [profiles, students, teachers, subjects, groups, careers, specialties] = await Promise.all([
+    supabase.from("profiles").select("id,first_name,last_name,email,role").eq("is_active", true).or(`first_name.ilike.${pattern},last_name.ilike.${pattern},email.ilike.${pattern}`).limit(6),
     supabase.from("students").select("id,control_number").ilike("control_number", pattern).limit(4),
     supabase.from("teachers").select("id,employee_number").ilike("employee_number", pattern).limit(4),
     supabase.from("subjects").select("id,name,code").or(`name.ilike.${pattern},code.ilike.${pattern}`).limit(5),
     supabase.from("groups").select("id,code,subject_id").ilike("code", pattern).limit(5),
+    supabase.from("careers").select("id,name").ilike("name", pattern).limit(5),
+    supabase.from("academic_specialties").select("code,name").ilike("name", pattern).limit(5),
   ]);
   const items = [
-    ...(profiles.data ?? []).map(item => ({ title: [item.first_name,item.last_name].filter(Boolean).join(" ") || item.email, detail: `${item.email} · ${item.role}`, href: `/admin/usuarios?q=${encodeURIComponent(term)}`, kind: "Usuario" })),
-    ...(students.data ?? []).map(item => ({ title: item.control_number || "Alumno", detail: "Número de control", href: `/admin/alumnos?q=${encodeURIComponent(term)}`, kind: "Alumno" })),
-    ...(teachers.data ?? []).map(item => ({ title: item.employee_number || "Docente", detail: "Número de trabajador", href: `/admin/docentes?q=${encodeURIComponent(term)}`, kind: "Docente" })),
+    ...(profiles.data ?? []).map(item => ({ title: [item.first_name,item.last_name].filter(Boolean).join(" ") || item.email, detail: `${item.email} · ${item.role}`, href: `/admin/usuarios?userId=${encodeURIComponent(item.id)}`, kind: "Usuario" })),
+    ...(students.data ?? []).map(item => ({ title: item.control_number || "Alumno", detail: "Número de control", href: `/admin/alumnos?userId=${encodeURIComponent(item.id)}`, kind: "Alumno" })),
+    ...(teachers.data ?? []).map(item => ({ title: item.employee_number || "Docente", detail: "Número de trabajador", href: `/admin/docentes?userId=${encodeURIComponent(item.id)}`, kind: "Docente" })),
     ...(subjects.data ?? []).map(item => ({ title: item.name, detail: item.code, href: `/admin/materias?q=${encodeURIComponent(term)}`, kind: "Materia" })),
     ...(groups.data ?? []).map(item => ({ title: item.code, detail: "Grupo académico", href: `/admin/grupos?q=${encodeURIComponent(term)}`, kind: "Grupo" })),
+    ...(careers.data ?? []).map(item => ({ title: item.name, detail: "Programa académico", href: `/admin/carreras?q=${encodeURIComponent(term)}`, kind: "Carrera" })),
+    ...(specialties.data ?? []).map(item => ({ title: item.name, detail: item.code, href: `/admin/alumnos?q=${encodeURIComponent(term)}`, kind: "Especialidad" })),
   ];
   return { ok: true as const, items };
 }

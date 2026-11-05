@@ -1,4 +1,7 @@
+import { appInfo } from "@/lib/app-info";
+
 export function BrandLockup({ size = "default" }: { size?: "default" | "compact" | "splash" }) {
+  const [firstWord, ...remainingWords] = appInfo.name.toLocaleUpperCase().split(" ");
   return (
     <span className={`brand-lockup brand-lockup--${size}`}>
       <span className="brand-symbol" aria-hidden="true">
@@ -10,8 +13,8 @@ export function BrandLockup({ size = "default" }: { size?: "default" | "compact"
         </svg>
       </span>
       <span className="brand-wordmark">
-        <span className="brand-wordmark-primary">BANCO</span>
-        <span className="brand-wordmark-secondary">ACADÉMICO</span>
+        <span className="brand-wordmark-primary">{firstWord}</span>
+        <span className="brand-wordmark-secondary">{remainingWords.join(" ")}</span>
       </span>
     </span>
   );

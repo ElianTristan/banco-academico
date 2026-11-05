@@ -131,18 +131,21 @@ test("4. Server Actions solo exportan funciones async y verifican rol administra
 test("5. Interfaz con mensaje explicativo institucional y advertencia de disco físico", () => {
   // Mensaje explicativo exacto requerido por el usuario
   const normalizedWorkspace = workspace.replace(/\s+/g, " ");
-  const exactPromptMessage =
-    "El respaldo permite generar una copia de seguridad de la información de Banco Académico para proteger los datos ante errores, pérdidas de información o incidentes técnicos. Se recomienda realizar los respaldos en horarios de baja actividad o fuera del horario de uso del sistema.";
-  assert.ok(normalizedWorkspace.includes(exactPromptMessage), "El mensaje institucional de respaldo debe coincidir exactamente");
+  assert.match(normalizedWorkspace, /Opción de respaldo: el respaldo guarda una copia de la información del sistema/);
+  assert.match(normalizedWorkspace, /No incluye el esquema SQL, cuentas de Supabase Auth ni los archivos binarios/);
 
   // Advertencia de no guardar en el mismo disco físico
   assert.match(workspace, /no conserve el único respaldo en el mismo disco físico/i);
-  assert.match(workspace, /Unidad USB/);
-  assert.match(workspace, /Disco duro externo/);
-  assert.match(workspace, /Almacenamiento en la nube/);
+  assert.match(workspace, /no puede detectar conexión ni espacio disponible/);
+  assert.match(workspace, /nube institucional sí se guarda en Supabase Storage/);
 
-  // Advertencia crítica obligatoria de recuperación
-  assert.match(workspace, /ADVERTENCIA: La recuperación puede sustituir información actual/);
+  // La UI debe describir honestamente la operación upsert, no anunciar sustitución completa.
+  assert.match(workspace, /No elimina registros ausentes del archivo/);
+  assert.match(workspace, /no equivale a una sustitución completa/);
+  assert.match(engine, /const isCountConsistent = foundCount === expectedMeta\.count/);
+  assert.match(engine, /ok: verified/);
+  assert.match(engine, /await saveCloudBackup\(preRestoreFilename, preBackup\.zipBuffer\)/);
+  assert.match(engine, /\.range\(offset, offset \+ pageSize - 1\)/);
 
   // Salvaguarda previa automática
   assert.match(workspace, /Salvaguarda previa automática/i);
@@ -155,8 +158,12 @@ test("5. Interfaz con mensaje explicativo institucional y advertencia de disco f
 // 6. Integración en el Portal y Navegación
 test("6. Integración de BackupRecoveryWorkspace en Portal y nav de Administrador", () => {
   assert.match(portal, /import\s*\{\s*BackupRecoveryWorkspace\s*\}\s*from\s*["']@\/components\/backup-recovery-workspace["']/);
-  assert.match(portal, /active==="respaldos"&&admin\?<BackupRecoveryWorkspace\/>/);
-  assert.match(portal, /respaldos:\{title:"Respaldo y Recuperación de Información"/);
+  assert.match(portal, /active&&\["respaldos","recuperacion","historial-respaldos"\]\.includes\(active\)&&admin/);
+  assert.match(portal, /active==="herramientas"&&admin\?<AdminToolsWorkspace\/>/);
+  assert.match(portal, /href="\/admin\/herramientas"/);
+  assert.match(portal, /recuperacion:\{title:"Recuperación de información"/);
+  assert.match(workspace, /href="\/admin\/recuperacion"/);
+  assert.match(workspace, /href="\/admin\/historial-respaldos"/);
   assert.match(portal, /\{label:"Respaldos",href:"\/admin\/respaldos",icon:Database\}/);
 });
 
