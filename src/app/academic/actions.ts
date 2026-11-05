@@ -155,6 +155,32 @@ export async function createAdvisory(formData: FormData): Promise<ActionResult> 
   return { ok: true };
 }
 
+export async function publishPost(formData: FormData): Promise<ActionResult> {
+  const parsed = z.object({
+    title: z.string().trim().min(3).max(180),
+    body: z.string().trim().min(3).max(4000),
+    postType: z.enum(["tarea", "anuncio"]),
+    groupId: z.union([z.string().uuid(), z.literal("")]).default(""),
+  }).safeParse(Object.fromEntries(formData));
+  if (!parsed.success) return { ok: false, error: "Completa el título, el mensaje y el grupo destinatario." };
+  const { supabase, user, role } = await actor();
+  if (!user || !["docente", "administrador"].includes(role ?? "")) return { ok: false, error: "Solo un docente o administrador activo puede publicar." };
+  if (role === "docente" && !parsed.data.groupId) return { ok: false, error: "Selecciona uno de tus grupos para publicar." };
+  const { data, error } = await supabase.from("posts").insert({
+    title: parsed.data.title,
+    body: parsed.data.body,
+    post_type: parsed.data.postType,
+    group_id: parsed.data.groupId || null,
+    created_by: user.id,
+  }).select("id").single();
+  if (error || !data) return { ok: false, error: "No se pudo publicar. Verifica que esté aplicada la migración 0013 y que tengas acceso al grupo." };
+  await supabase.from("activity_logs").insert({ user_id: user.id, action: parsed.data.postType === "tarea" ? "Publicó una tarea" : "Publicó un anuncio", module: "Avisos", record_id: data.id, description: parsed.data.title });
+  revalidatePath("/admin/avisos");
+  revalidatePath("/docente/avisos");
+  revalidatePath("/alumno/avisos");
+  return { ok: true };
+}
+
 export async function reserveAdvisory(sessionId: string): Promise<ActionResult> {
   if (!idValue.safeParse(sessionId).success) return { ok: false, error: "La asesoría seleccionada no es válida." };
   const { supabase, user, role } = await actor();

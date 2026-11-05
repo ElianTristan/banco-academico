@@ -137,6 +137,63 @@ export async function createManagedUser(formData: FormData): Promise<AdminAction
   return { ok: true };
 }
 
+export async function updateManagedUser(formData: FormData): Promise<AdminActionResult> {
+  const parsed = z.object({
+    userId: z.string().uuid(), role: z.enum(["alumno", "docente"]),
+    firstName: z.string().trim().min(1).max(80), lastName: z.string().trim().min(1).max(100),
+    email: z.string().trim().email().max(254).transform(value => value.toLowerCase()),
+    controlNumber: z.string().trim().max(40).optional().default(""),
+    employeeNumber: z.string().trim().max(40).optional().default(""),
+    department: z.string().trim().max(120).optional().default(""),
+  }).superRefine((value, context) => {
+    if (value.role === "alumno" && value.controlNumber.length < 2) context.addIssue({ code: "custom", path: ["controlNumber"], message: "Escribe un número de control válido." });
+    if (value.role === "docente" && value.employeeNumber.length < 2) context.addIssue({ code: "custom", path: ["employeeNumber"], message: "Escribe un número de trabajador válido." });
+    if (value.role === "docente" && value.department.length < 2) context.addIssue({ code: "custom", path: ["department"], message: "Escribe el departamento del docente." });
+  }).safeParse(Object.fromEntries(formData));
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Revisa los datos del formulario." };
+  const administrator = await getActiveAdministrator();
+  if ("ok" in administrator) return administrator;
+  if (parsed.data.userId === administrator.actorId) return { ok: false, error: "No edites tu propia cuenta desde este directorio." };
+  const session = await createClient();
+  const { data: targetProfile, error: targetError } = await session.from("profiles").select("role").eq("id", parsed.data.userId).maybeSingle();
+  if (targetError || !targetProfile) return { ok: false, error: "No se encontró la cuenta seleccionada." };
+  if (!["alumno", "docente"].includes(targetProfile.role)) return { ok: false, error: "Las cuentas administradoras no se pueden editar desde este formulario." };
+  if (!hasSupabaseServiceRoleConfig()) return { ok: false, error: "La edición requiere configuración administrativa del servidor." };
+
+  const service = createServiceRoleClient();
+  const { data: existing, error: lookupError } = await service.auth.admin.getUserById(parsed.data.userId);
+  if (lookupError || !existing.user) return { ok: false, error: "No se encontró la cuenta seleccionada." };
+  const oldUser = existing.user;
+  const { error: authError } = await service.auth.admin.updateUserById(parsed.data.userId, {
+    email: parsed.data.email,
+    email_confirm: true,
+    user_metadata: { ...oldUser.user_metadata, first_name: parsed.data.firstName, last_name: parsed.data.lastName },
+  });
+  if (authError) return { ok: false, error: authError.code === "email_exists" ? "Ya existe una cuenta con ese correo." : "No se pudo actualizar el correo en Supabase Auth." };
+
+  const supabase = await createClient();
+  const { error } = await supabase.rpc("update_managed_profile", {
+    target_user_id: parsed.data.userId,
+    target_first_name: parsed.data.firstName,
+    target_last_name: parsed.data.lastName,
+    target_email: parsed.data.email,
+    target_role: parsed.data.role,
+    target_control_number: parsed.data.role === "alumno" ? parsed.data.controlNumber : null,
+    target_employee_number: parsed.data.role === "docente" ? parsed.data.employeeNumber : null,
+    target_department: parsed.data.role === "docente" ? parsed.data.department : null,
+  });
+  if (error) {
+    const { error: rollbackError } = await service.auth.admin.updateUserById(parsed.data.userId, { email: oldUser.email, email_confirm: true, user_metadata: oldUser.user_metadata });
+    if (rollbackError) console.error("Could not restore authentication details after a profile edit failed.", rollbackError);
+    const duplicate = error.code === "23505" || error.message.includes("duplicate key");
+    if (!duplicate) console.error("Could not update a managed profile.", error);
+    return { ok: false, error: duplicate ? "El correo o matrícula ya está asignado a otra cuenta." : "No se pudo guardar la edición. Verifica que esté aplicada la migración 0013." };
+  }
+
+  for (const path of ["/admin/usuarios", "/admin/alumnos", "/admin/docentes"]) revalidatePath(path);
+  return { ok: true };
+}
+
 export async function deactivateManagedUser(userId: string): Promise<AdminActionResult> {
   if (!z.string().uuid().safeParse(userId).success) {
     return { ok: false, error: "La cuenta seleccionada no es válida." };
