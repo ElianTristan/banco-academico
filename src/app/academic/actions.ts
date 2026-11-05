@@ -4,7 +4,7 @@ import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 
-type ActionResult = { ok: true; data?: { url?: string } } | { ok: false; error: string };
+type ActionResult = { ok: true; data?: { url?: string; conversationId?: string } } | { ok: false; error: string };
 const materialType = z.enum(["Apuntes", "Guía", "Ejercicios", "Presentación", "Práctica", "Lectura", "Resumen", "Otro"]);
 const idValue = z.string().uuid();
 
@@ -161,24 +161,67 @@ export async function publishPost(formData: FormData): Promise<ActionResult> {
     body: z.string().trim().min(3).max(4000),
     postType: z.enum(["tarea", "anuncio"]),
     groupId: z.union([z.string().uuid(), z.literal("")]).default(""),
+    attachmentPath: z.string().max(500).default(""),
   }).safeParse(Object.fromEntries(formData));
   if (!parsed.success) return { ok: false, error: "Completa el título, el mensaje y el grupo destinatario." };
   const { supabase, user, role } = await actor();
-  if (!user || !["docente", "administrador"].includes(role ?? "")) return { ok: false, error: "Solo un docente o administrador activo puede publicar." };
-  if (role === "docente" && !parsed.data.groupId) return { ok: false, error: "Selecciona uno de tus grupos para publicar." };
+  if (!user || !["alumno", "docente", "administrador"].includes(role ?? "")) return { ok: false, error: "Inicia sesión con una cuenta activa para publicar." };
+  if (role !== "administrador" && !parsed.data.groupId) return { ok: false, error: "Selecciona un grupo al que pertenezcas para publicar." };
+  if (parsed.data.attachmentPath && !parsed.data.attachmentPath.startsWith(`${user.id}/`)) return { ok: false, error: "El PDF no pertenece a tu cuenta." };
   const { data, error } = await supabase.from("posts").insert({
     title: parsed.data.title,
     body: parsed.data.body,
     post_type: parsed.data.postType,
     group_id: parsed.data.groupId || null,
+    attachment_path: parsed.data.attachmentPath || null,
     created_by: user.id,
   }).select("id").single();
   if (error || !data) return { ok: false, error: "No se pudo publicar. Verifica que esté aplicada la migración 0013 y que tengas acceso al grupo." };
   await supabase.from("activity_logs").insert({ user_id: user.id, action: parsed.data.postType === "tarea" ? "Publicó una tarea" : "Publicó un anuncio", module: "Avisos", record_id: data.id, description: parsed.data.title });
-  revalidatePath("/admin/avisos");
-  revalidatePath("/docente/avisos");
-  revalidatePath("/alumno/avisos");
+  revalidatePath("/admin/avisos"); revalidatePath("/docente/avisos"); revalidatePath("/alumno/avisos");
   return { ok: true };
+}
+
+export async function downloadPostAttachment(postId: string): Promise<ActionResult> {
+  if (!idValue.safeParse(postId).success) return { ok: false, error: "La publicación seleccionada no es válida." };
+  const { supabase, user } = await actor();
+  if (!user) return { ok: false, error: "Inicia sesión para descargar este archivo." };
+  const { data: post, error } = await supabase.from("posts").select("attachment_path").eq("id", postId).maybeSingle();
+  if (error || !post?.attachment_path) return { ok: false, error: "No tienes acceso a este PDF o ya no está disponible." };
+  const { data, error: urlError } = await supabase.storage.from("academic-posts").createSignedUrl(post.attachment_path, 60, { download: true });
+  if (urlError || !data?.signedUrl) return { ok: false, error: "No se pudo preparar la descarga del PDF." };
+  return { ok: true, data: { url: data.signedUrl } };
+}
+
+export async function startDirectChat(contactId: string): Promise<ActionResult> {
+  if (!idValue.safeParse(contactId).success) return { ok: false, error: "Selecciona una cuenta válida." };
+  const { supabase, user } = await actor();
+  if (!user) return { ok: false, error: "Inicia sesión para abrir el chat." };
+  const { data, error } = await supabase.rpc("start_direct_chat", { target_user: contactId });
+  if (error || typeof data !== "string") return { ok: false, error: "No se pudo abrir la conversación. Verifica que esté aplicada la migración 0014." };
+  revalidatePath("/admin/mensajes"); revalidatePath("/docente/mensajes"); revalidatePath("/alumno/mensajes");
+  return { ok: true, data: { conversationId: data } };
+}
+
+export async function sendChatMessage(conversationId: string, body: string): Promise<ActionResult> {
+  if (!idValue.safeParse(conversationId).success) return { ok: false, error: "La conversación seleccionada no es válida." };
+  const message = z.string().trim().min(1).max(4000).safeParse(body);
+  if (!message.success) return { ok: false, error: "Escribe un mensaje de hasta 4,000 caracteres." };
+  const { supabase, user } = await actor();
+  if (!user) return { ok: false, error: "Inicia sesión para enviar mensajes." };
+  const { error } = await supabase.from("chat_messages").insert({ conversation_id: conversationId, sender_id: user.id, body: message.data });
+  if (error) return { ok: false, error: "No se pudo enviar el mensaje. Verifica que seas parte del chat y esté aplicada la migración 0014." };
+  revalidatePath("/admin/mensajes"); revalidatePath("/docente/mensajes"); revalidatePath("/alumno/mensajes");
+  return { ok: true };
+}
+
+export async function loadChatMessages(conversationId: string) {
+  if (!idValue.safeParse(conversationId).success) return { ok: false as const, error: "La conversación seleccionada no es válida.", items: [] };
+  const { supabase, user } = await actor();
+  if (!user) return { ok: false as const, error: "Inicia sesión para ver tus mensajes.", items: [] };
+  const { data, error } = await supabase.rpc("list_chat_messages", { target_conversation: conversationId });
+  if (error) return { ok: false as const, error: "No se pudieron cargar los mensajes. Verifica que esté aplicada la migración 0014.", items: [] };
+  return { ok: true as const, items: data ?? [] };
 }
 
 export async function reserveAdvisory(sessionId: string): Promise<ActionResult> {
