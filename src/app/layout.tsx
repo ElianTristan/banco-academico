@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { appInfo } from "@/lib/app-info";
+import { SessionIntro } from "@/components/session-intro";
 
 export const metadata: Metadata = {
   title: `${appInfo.name} | ${appInfo.institution}`,
@@ -18,5 +19,5 @@ export const viewport: Viewport = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="es"><body>{children}</body></html>;
+  return <html lang="es"><body><SessionIntro>{children}</SessionIntro></body></html>;
 }

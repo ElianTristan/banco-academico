@@ -3,7 +3,9 @@ import { LockKeyhole } from "lucide-react";
 import { BrandLockup } from "@/components/brand-lockup";
 import { InstitutionalFooter } from "@/components/institutional-footer";
 import { PageTransition } from "@/components/page-transition";
+import { RemotePhoto } from "@/components/remote-photo";
 import { appInfo } from "@/lib/app-info";
+import { visualAssets } from "@/lib/visual-assets";
 
 export default function AuthLayout({ children }: { children: React.ReactNode }) {
   return <PageTransition className="auth-page-shell">
@@ -15,17 +17,15 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
         </header>
         <section className="auth-card">{children}</section>
       </main>
-      <aside className="auth-info-panel" aria-label="Información del sistema">
-        <span className="auth-info-kicker">Plataforma académica</span>
-        <h2>{appInfo.name}</h2>
-        <p className="auth-info-institution">{appInfo.institution}</p>
-        <dl className="auth-info-list">
-          <div><dt>Versión</dt><dd>{appInfo.version}</dd></div>
-          <div><dt>Pantalla</dt><dd>{appInfo.moduleName}</dd></div>
-          <div><dt>Equipo</dt><dd>{appInfo.teamName}</dd></div>
-          <div><dt>Interfaz actualizada</dt><dd>{appInfo.interfaceUpdatedAt}</dd></div>
-        </dl>
-        <p className="auth-info-note">Consulta materias, recursos y servicios académicos desde el espacio correspondiente a tu perfil.</p>
+      <aside className="auth-visual-panel" aria-label="Banco Académico, plataforma académica del ITSLP">
+        <RemotePhoto className="auth-visual-photo" src={visualAssets.classroom} sizes="(max-width: 760px) 100vw, 52vw" priority alt="Comunidad académica en un espacio de aprendizaje" />
+        <div className="auth-visual-gradient" aria-hidden="true" />
+        <div className="auth-visual-content">
+          <BrandLockup size="splash" />
+          <span className="auth-visual-kicker">{appInfo.institution}</span>
+          <h2>Un espacio para aprender, compartir y avanzar.</h2>
+          <p>Consulta tus materias, descubre recursos y mantente cerca de tu comunidad académica.</p>
+        </div>
       </aside>
       <InstitutionalFooter variant="auth"/>
     </div>
