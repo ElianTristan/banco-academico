@@ -52,25 +52,22 @@ export async function saveProfile(formData: FormData): Promise<ActionResult> {
     lastName: z.string().trim().min(1).max(100),
     theme: z.enum(["light", "dark"]),
     avatarPath: z.string().max(500).optional().default(""),
-    semester: z.coerce.number().int().min(1).max(13).optional(),
-    specialty: z.enum(["Ciberseguridad", "Gestión de Servicios de TI"]).or(z.literal("")).optional().default(""),
   }).safeParse(Object.fromEntries(formData));
-  if (!parsed.success) return { ok: false, error: "Revisa tu nombre, semestre y especialidad. El semestre debe estar entre 1 y 13." };
+  if (!parsed.success) return { ok: false, error: "Revisa tu nombre, apellidos y preferencias." };
   const { supabase, user, role } = await actor();
   if (!user) return { ok: false, error: "Inicia sesión para editar tu perfil." };
-  const { avatarPath, semester, specialty, ...profileFields } = parsed.data;
+  const { avatarPath, ...profileFields } = parsed.data;
   if (avatarPath && !avatarPath.startsWith(`${user.id}/`)) return { ok: false, error: "La fotografía no pertenece a tu cuenta." };
   if (role === "alumno") {
-    if (semester === undefined) return { ok: false, error: "Selecciona un semestre entre 1 y 13." };
     const { error } = await supabase.rpc("save_student_academic_profile", {
       target_first_name: profileFields.firstName,
       target_last_name: profileFields.lastName,
       target_preferred_theme: profileFields.theme,
       target_avatar_path: avatarPath,
-      target_semester: semester,
-      target_specialty: specialty || null,
+      target_semester: null,
+      target_specialty: null,
     });
-    if (error) return { ok: false, error: "No se guardaron los cambios académicos. Verifica que esté aplicada la migración 0009 y vuelve a intentar." };
+    if (error) return { ok: false, error: "No se pudieron guardar tus datos personales. Verifica que esté aplicada la migración 0016 y vuelve a intentar." };
     revalidatePath("/alumno");
     return { ok: true };
   }
@@ -82,6 +79,195 @@ export async function saveProfile(formData: FormData): Promise<ActionResult> {
   if (profileError) return { ok: false, error: "No se pudieron guardar tus datos personales." };
   await supabase.from("activity_logs").insert({ user_id: user.id, action: "Actualizó su perfil", module: "Perfil", description: "Datos personales y preferencias" });
   revalidatePath("/alumno"); revalidatePath("/docente"); revalidatePath("/admin");
+  return { ok: true };
+}
+
+export type GradebookItem = {
+  enrollmentId: string;
+  controlNumber: string | null;
+  grades: Array<{
+    id: string;
+    assessment: string;
+    score: number | null;
+    recordedAt: string;
+  }>;
+};
+
+export async function loadGradebook(groupId: string) {
+  if (!idValue.safeParse(groupId).success) {
+    return { ok: false as const, error: "El grupo seleccionado no es válido.", items: [] as GradebookItem[] };
+  }
+  const { supabase, user, role } = await actor();
+  if (!user || !["administrador", "docente"].includes(role ?? "")) {
+    return { ok: false as const, error: "Inicia sesión con una cuenta docente o administrativa.", items: [] as GradebookItem[] };
+  }
+
+  const { data: group, error: groupError } = await supabase
+    .from("groups")
+    .select("id,active,period_id")
+    .eq("id", groupId)
+    .maybeSingle();
+  if (groupError || !group) {
+    if (groupError) console.error("Could not load a gradebook group.", groupError);
+    return { ok: false as const, error: "No se encontró el grupo o no tienes acceso.", items: [] as GradebookItem[] };
+  }
+  if (!group.active) {
+    return { ok: false as const, error: "No se pueden registrar calificaciones en un grupo inactivo.", items: [] as GradebookItem[] };
+  }
+  if (role === "docente") {
+    const [{ data: assignment, error: assignmentError }, { data: period, error: periodError }] = await Promise.all([
+      supabase.from("teacher_groups").select("id").eq("teacher_id", user.id).eq("group_id", groupId).maybeSingle(),
+      supabase.from("academic_periods").select("is_current").eq("id", group.period_id).maybeSingle(),
+    ]);
+    if (assignmentError || periodError) {
+      console.error("Could not validate teacher access to a gradebook.", assignmentError ?? periodError);
+      return { ok: false as const, error: "No se pudieron verificar el grupo y el periodo académico.", items: [] as GradebookItem[] };
+    }
+    if (!assignment) {
+      return { ok: false as const, error: "No tienes asignado este grupo.", items: [] as GradebookItem[] };
+    }
+    if (!period?.is_current) {
+      return { ok: false as const, error: "Solo puedes capturar calificaciones en el periodo escolar vigente.", items: [] as GradebookItem[] };
+    }
+  }
+
+  const enrollmentRows: Array<{ id: string; student_id: string }> = [];
+  for (let from = 0; ; from += 500) {
+    const { data, error } = await supabase
+      .from("enrollments")
+      .select("id,student_id")
+      .eq("group_id", groupId)
+      .eq("status", "active")
+      .order("enrolled_at")
+      .range(from, from + 499);
+    if (error) {
+      console.error("Could not load the active gradebook roster.", error);
+      return { ok: false as const, error: "No se pudo cargar la lista de alumnos del grupo.", items: [] as GradebookItem[] };
+    }
+    enrollmentRows.push(...(data ?? []));
+    if (!data || data.length < 500) break;
+    if (enrollmentRows.length >= 10000) {
+      return { ok: false as const, error: "El grupo supera el límite de alumnos que se puede cargar en una sola captura.", items: [] as GradebookItem[] };
+    }
+  }
+
+  if (!enrollmentRows.length) return { ok: true as const, items: [] as GradebookItem[] };
+  const enrollmentIds = enrollmentRows.map((row) => row.id);
+  const studentIds = [...new Set(enrollmentRows.map((row) => row.student_id))];
+  const [{ data: students, error: studentsError }, { data: gradeRows, error: gradesError }] = await Promise.all([
+    supabase.from("students").select("id,control_number").in("id", studentIds),
+    supabase.from("grades").select("id,enrollment_id,assessment,score,recorded_at").in("enrollment_id", enrollmentIds).order("assessment"),
+  ]);
+  if (studentsError || gradesError) {
+    console.error("Could not load gradebook student or grade rows.", studentsError ?? gradesError);
+    return { ok: false as const, error: "No se pudieron cargar las calificaciones del grupo.", items: [] as GradebookItem[] };
+  }
+
+  const controlNumberByStudent = new Map((students ?? []).map((student) => [student.id, student.control_number]));
+  const gradesByEnrollment = new Map<string, GradebookItem["grades"]>();
+  for (const grade of gradeRows ?? []) {
+    const bucket = gradesByEnrollment.get(grade.enrollment_id) ?? [];
+    bucket.push({
+      id: grade.id,
+      assessment: grade.assessment,
+      score: grade.score === null ? null : Number(grade.score),
+      recordedAt: grade.recorded_at,
+    });
+    gradesByEnrollment.set(grade.enrollment_id, bucket);
+  }
+
+  return {
+    ok: true as const,
+    items: enrollmentRows.map((enrollment) => ({
+      enrollmentId: enrollment.id,
+      controlNumber: controlNumberByStudent.get(enrollment.student_id) ?? null,
+      grades: gradesByEnrollment.get(enrollment.id) ?? [],
+    })),
+  };
+}
+
+export async function saveGrades(
+  groupId: string,
+  assessment: string,
+  grades: Array<{ enrollmentId: string; score: number }>,
+): Promise<ActionResult> {
+  const parsedGroup = idValue.safeParse(groupId);
+  const parsedAssessment = z.string().trim().min(1).max(80).safeParse(assessment);
+  const parsedGrades = z.array(z.object({
+    enrollmentId: idValue,
+    score: z.number().finite().min(0).max(100),
+  })).min(1).max(500).safeParse(grades);
+  if (!parsedGroup.success || !parsedAssessment.success || !parsedGrades.success) {
+    return { ok: false, error: "Revisa la evaluación y captura calificaciones entre 0 y 100." };
+  }
+  const enrollmentIds = parsedGrades.data.map((grade) => grade.enrollmentId);
+  if (new Set(enrollmentIds).size !== enrollmentIds.length) {
+    return { ok: false, error: "La lista contiene alumnos duplicados." };
+  }
+
+  const { supabase, user, role } = await actor();
+  if (!user || !["administrador", "docente"].includes(role ?? "")) {
+    return { ok: false, error: "Inicia sesión con una cuenta docente o administrativa." };
+  }
+
+  const { data: group, error: groupError } = await supabase
+    .from("groups")
+    .select("id,active,period_id")
+    .eq("id", groupId)
+    .maybeSingle();
+  if (groupError || !group || !group.active) {
+    if (groupError) console.error("Could not validate a group before saving grades.", groupError);
+    return { ok: false, error: "El grupo no existe, está inactivo o no tienes acceso." };
+  }
+  if (role === "docente") {
+    const [{ data: assignment, error: assignmentError }, { data: period, error: periodError }] = await Promise.all([
+      supabase.from("teacher_groups").select("id").eq("teacher_id", user.id).eq("group_id", groupId).maybeSingle(),
+      supabase.from("academic_periods").select("is_current").eq("id", group.period_id).maybeSingle(),
+    ]);
+    if (assignmentError || periodError) {
+      console.error("Could not validate teacher grade permissions.", assignmentError ?? periodError);
+      return { ok: false, error: "No se pudieron verificar el grupo y el periodo académico." };
+    }
+    if (!assignment) return { ok: false, error: "No tienes asignado este grupo." };
+    if (!period?.is_current) return { ok: false, error: "Solo puedes capturar calificaciones en el periodo escolar vigente." };
+  }
+
+  const { data: enrollments, error: enrollmentError } = await supabase
+    .from("enrollments")
+    .select("id")
+    .eq("group_id", groupId)
+    .eq("status", "active")
+    .in("id", enrollmentIds);
+  if (enrollmentError) {
+    console.error("Could not validate grade enrollment ownership.", enrollmentError);
+    return { ok: false, error: "No se pudieron verificar los alumnos del grupo." };
+  }
+  if ((enrollments ?? []).length !== enrollmentIds.length) {
+    return { ok: false, error: "La lista incluye alumnos que no pertenecen a este grupo o ya no están inscritos." };
+  }
+
+  const recordedAt = new Date().toISOString();
+  const { error } = await supabase.from("grades").upsert(
+    parsedGrades.data.map((grade) => ({
+      enrollment_id: grade.enrollmentId,
+      assessment: parsedAssessment.data,
+      score: grade.score,
+      recorded_by: user.id,
+      recorded_at: recordedAt,
+      updated_at: recordedAt,
+    })),
+    { onConflict: "enrollment_id,assessment" },
+  );
+  if (error) {
+    console.error("Could not save gradebook records.", error);
+    return { ok: false, error: "No se pudieron guardar las calificaciones. Verifica que esté aplicada la migración 0016." };
+  }
+
+  revalidatePath("/admin/calificaciones");
+  revalidatePath("/admin/reportes");
+  revalidatePath("/docente/calificaciones");
+  revalidatePath("/docente/estadisticas");
+  revalidatePath("/alumno/calificaciones");
   return { ok: true };
 }
 
@@ -134,13 +320,43 @@ export async function downloadMaterial(materialId: string): Promise<ActionResult
   if (!idValue.safeParse(materialId).success) return { ok: false, error: "Material inválido." };
   const { supabase, user } = await actor();
   if (!user) return { ok: false, error: "Inicia sesión para descargar materiales." };
-  const { data: material, error } = await supabase.from("materials").select("storage_path,title").eq("id", materialId).maybeSingle();
-  if (error || !material?.storage_path) return { ok: false, error: "Este material no tiene un archivo disponible." };
-  const { data: signed, error: signedError } = await supabase.storage.from("academic-materials").createSignedUrl(material.storage_path, 60);
+  const { data: material, error } = await supabase.from("materials").select("storage_path,title,status").eq("id", materialId).maybeSingle();
+  if (error || !material?.storage_path || !["Aprobado", "Verificado"].includes(material.status)) return { ok: false, error: "Este material no tiene un archivo disponible." };
+  const { data: signed, error: signedError } = await supabase.storage.from("academic-materials").createSignedUrl(material.storage_path, 60, { download: true });
   if (signedError || !signed?.signedUrl) return { ok: false, error: "No tienes permiso para descargar este archivo." };
   const { error: logError } = await supabase.from("material_downloads").insert({ material_id: materialId, user_id: user.id });
   if (logError) return { ok: false, error: "No se pudo registrar la descarga." };
   await supabase.from("activity_logs").insert({ user_id: user.id, action: "Descargó material", module: "Biblioteca", record_id: materialId, description: material.title });
+  return { ok: true, data: { url: signed.signedUrl } };
+}
+
+export async function viewMaterial(materialId: string): Promise<ActionResult> {
+  if (!idValue.safeParse(materialId).success) return { ok: false, error: "Material inválido." };
+  const { supabase, user } = await actor();
+  if (!user) return { ok: false, error: "Inicia sesión para consultar materiales." };
+  const { data: material, error } = await supabase
+    .from("materials")
+    .select("storage_path,title,status")
+    .eq("id", materialId)
+    .maybeSingle();
+  if (error || !material?.storage_path || !["Aprobado", "Verificado"].includes(material.status)) {
+    return { ok: false, error: "Este material no está disponible para consulta." };
+  }
+  const { data: signed, error: signedError } = await supabase
+    .storage.from("academic-materials")
+    .createSignedUrl(material.storage_path, 60);
+  if (signedError || !signed?.signedUrl) return { ok: false, error: "No tienes permiso para consultar este archivo." };
+  const { error: logError } = await supabase
+    .from("material_views")
+    .insert({ material_id: materialId, user_id: user.id });
+  if (logError) return { ok: false, error: "No se pudo registrar la consulta. Verifica que esté aplicada la migración 0017." };
+  await supabase.from("activity_logs").insert({
+    user_id: user.id,
+    action: "Consultó material",
+    module: "Biblioteca",
+    record_id: materialId,
+    description: material.title,
+  });
   return { ok: true, data: { url: signed.signedUrl } };
 }
 

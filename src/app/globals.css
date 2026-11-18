@@ -1503,3 +1503,79 @@ body{line-height:1.5}
 .chat-selected-file small{color:#7b899c}
 .chat-selected-file button{display:grid;place-items:center;width:26px;height:26px;border:0;border-radius:7px;background:transparent;color:#526174;cursor:pointer}
 .chat-selected-file button:hover{background:#f1f4f8}
+
+.admin-academic-workspace{display:grid;gap:16px}
+.admin-academic-search{display:grid;gap:7px;margin:0 0 16px}
+.admin-academic-search>span{color:#5c6c81;font-size:11px;font-weight:650}
+.admin-academic-search input{width:100%;height:42px;padding:0 12px;border:1px solid #dce4ef;border-radius:12px;background:#fff;color:#142742}
+.admin-academic-list{display:grid;border-top:1px solid #e5ebf3}
+.admin-academic-row{border-bottom:1px solid #e8edf4}
+.admin-academic-row>summary{display:grid;grid-template-columns:minmax(150px,.8fr) minmax(180px,1.3fr) auto;align-items:center;gap:12px;min-height:62px;padding:10px 8px;cursor:pointer;list-style:none}
+.admin-academic-row>summary::-webkit-details-marker{display:none}
+.admin-academic-row>summary::after{content:"";justify-self:end;width:8px;height:8px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(45deg);transition:transform 160ms ease-out}
+.admin-academic-row[open]>summary::after{transform:rotate(225deg)}
+.admin-academic-row>summary strong{overflow-wrap:anywhere;color:#183b70;font-size:12px}
+.admin-academic-row>summary>span:not(.admin-account-status){color:#6b7a90;font-size:11px}
+.admin-academic-row-content{display:grid;gap:14px;padding:4px 12px 18px}
+.admin-academic-assignment{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:10px;max-width:760px}
+.admin-academic-teacher-list{display:grid;gap:6px;max-width:760px}
+.admin-academic-teacher{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 0;border-top:1px solid #e8edf4;color:#596a81;font-size:11px}
+.admin-academic-teacher .button{min-height:30px;padding:5px 9px;font-size:10px}
+.admin-academic-assigned{margin:0;color:#6b7a90;font-size:11px;line-height:1.5}
+.admin-academic-enrollments{display:grid;gap:8px}
+.admin-academic-enrollments h3{margin:2px 0;color:#243b58;font-size:12px}
+.admin-academic-enrollment{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:10px;padding:8px 0;border-top:1px solid #e8edf4;color:#596a81;font-size:11px}
+.admin-academic-enrollment strong{color:#183b70}
+.admin-academic-withdraw{min-height:32px;padding:5px 9px;font-size:10px}
+.admin-academic-empty{margin:12px 0}
+.admin-academic-pagination{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:14px;color:#6b7a90;font-size:11px}
+.admin-academic-pagination>label{display:flex;align-items:center;gap:8px}
+.admin-academic-pagination select{height:32px;padding:0 8px;border:1px solid #dce4ef;border-radius:9px;background:#fff;color:#142742}
+.admin-academic-pagination>div{display:flex;gap:7px}
+.admin-academic-pagination .button{min-height:32px;padding:6px 10px;font-size:10px}
+.app-shell[data-theme="dark"] .admin-academic-search>span,.app-shell[data-theme="dark"] .admin-academic-row>summary>span:not(.admin-account-status),.app-shell[data-theme="dark"] .admin-academic-assigned,.app-shell[data-theme="dark"] .admin-academic-pagination,.app-shell[data-theme="dark"] .admin-academic-enrollment{color:#bac8da}
+.app-shell[data-theme="dark"] .admin-academic-search input,.app-shell[data-theme="dark"] .admin-academic-pagination select{border-color:#405572;background:#1b2d47;color:#edf3fb}
+.app-shell[data-theme="dark"] .admin-academic-list,.app-shell[data-theme="dark"] .admin-academic-row,.app-shell[data-theme="dark"] .admin-academic-enrollment,.app-shell[data-theme="dark"] .admin-academic-teacher{border-color:#30435e}
+.app-shell[data-theme="dark"] .admin-academic-teacher{color:#bac8da}
+.app-shell[data-theme="dark"] .admin-academic-row>summary strong,.app-shell[data-theme="dark"] .admin-academic-enrollment strong,.app-shell[data-theme="dark"] .admin-academic-enrollments h3{color:#edf3fb}
+@media(max-width:700px){
+  .admin-academic-row>summary{grid-template-columns:minmax(0,1fr) auto;gap:6px 10px}
+  .admin-academic-row>summary>span:not(.admin-account-status){grid-column:1;grid-row:2}
+  .admin-academic-row>summary>.admin-account-status{grid-column:2;grid-row:1}
+  .admin-academic-row>summary::after{grid-column:2;grid-row:2}
+  .admin-academic-enrollment{grid-template-columns:minmax(0,1fr) auto}
+  .admin-academic-withdraw{grid-column:2}
+}
+@media(max-width:480px){
+  .admin-academic-assignment{grid-template-columns:1fr}
+  .admin-academic-pagination{align-items:flex-start;flex-wrap:wrap}
+  .admin-academic-pagination>span{flex:1}
+}
+@media(prefers-reduced-motion:reduce){.admin-academic-row>summary::after{transition:none}}
+
+.gradebook-panel{display:grid;gap:18px}
+.gradebook-controls{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:12px}
+.gradebook-controls .button{min-height:43px;white-space:nowrap}
+.gradebook-assessment{grid-template-columns:minmax(180px,.7fr) minmax(0,1fr);align-items:center;padding:14px 0 0;border-top:1px solid #e6ebf2}
+.gradebook-assessment .field-help{margin:0 0 4px;line-height:1.55}
+.gradebook-table-wrap{overflow-x:auto;border:1px solid #dce4ef;border-radius:12px}
+.gradebook-table{width:100%;border-collapse:collapse;text-align:left;font-size:12px}
+.gradebook-table th,.gradebook-table td{padding:11px 13px;border-bottom:1px solid #e6ebf2;vertical-align:middle}
+.gradebook-table th{background:#f7f9fc;color:#52657e;font-size:10px;font-weight:700;letter-spacing:.045em}
+.gradebook-table td{color:#243b58;font-variant-numeric:tabular-nums}
+.gradebook-table tbody tr:last-child td{border-bottom:0}
+.gradebook-table td small{display:block;margin-top:3px;color:#6b7a90;font-size:10px}
+.gradebook-table td input{width:104px;min-height:35px;padding:6px 9px;border:1px solid #cbd6e5;border-radius:9px;background:#fff;color:#183b70;font-variant-numeric:tabular-nums}
+.gradebook-table td input:focus-visible{outline:2px solid #8d3b55;outline-offset:2px}
+.app-shell[data-theme="dark"] .gradebook-assessment{border-color:#30435e}
+.app-shell[data-theme="dark"] .gradebook-table-wrap{border-color:#30435e}
+.app-shell[data-theme="dark"] .gradebook-table th,.app-shell[data-theme="dark"] .gradebook-table td{border-color:#30435e}
+.app-shell[data-theme="dark"] .gradebook-table th{background:#1b2d47;color:#c0cade}
+.app-shell[data-theme="dark"] .gradebook-table td{color:#e0e8f3}
+.app-shell[data-theme="dark"] .gradebook-table td small{color:#b7c4d6}
+.app-shell[data-theme="dark"] .gradebook-table td input{border-color:#405572;background:#1b2d47;color:#edf3fb}
+@media(max-width:620px){
+  .gradebook-controls,.gradebook-assessment{grid-template-columns:1fr}
+  .gradebook-controls .button{width:100%}
+  .gradebook-table{min-width:620px}
+}

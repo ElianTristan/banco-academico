@@ -4,7 +4,7 @@ import { useMemo, useState, useTransition, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import Image from "next/image";
-import { downloadMaterial, publishMaterial, reviewMaterial, toggleFavorite } from "@/app/academic/actions";
+import { downloadMaterial, publishMaterial, reviewMaterial, toggleFavorite, viewMaterial } from "@/app/academic/actions";
 import { unsplashLoader, visualAssets } from "@/lib/visual-assets";
 
 type Material = { id:string; title:string; description:string; material_type:string; status:string; semester:number|null; unit:string|null; storage_path:string|null; download_count:number; created_at:string; created_by:string; review_note:string|null; subject_id:string|null };
@@ -27,7 +27,7 @@ export function MaterialWorkspace({items,subjects,favoriteIds,userId,role,favori
       {loadError?<div className="empty" role="alert"><p>{loadError}</p><button className="button button-secondary" type="button" onClick={()=>router.refresh()}>Intentar de nuevo</button></div>:!visible.length?<div className="empty">{favoritesOnly?"Aún no guardas favoritos. Explora la biblioteca y agrega los recursos que te interesen.":role==="administrador"?"No hay materiales pendientes de revisión.":"No encontramos materiales con esos criterios."}</div>:<div className="material-list">{visible.map(m=><article className="material-row" key={m.id}><div className="material-main"><div className="material-heading"><h3>{m.title}</h3><span className={`status status-${m.status.toLocaleLowerCase()}`}>{m.status}</span></div><p>{m.description||"Sin descripción adicional."}</p><div className="material-meta"><span>{m.material_type}</span>{m.semester&&<span>Semestre {m.semester}</span>}{m.unit&&<span>{m.unit}</span>}<span>{new Date(m.created_at).toLocaleDateString("es-MX")}</span><span>{m.download_count} descargas</span></div>{m.review_note&&role!=="alumno"&&<small className="muted">Nota de revisión: {m.review_note}</small>}</div><div className="material-actions-row">
         {role==="alumno"&&m.status!=="Pendiente"&&<button className="button button-secondary" disabled={pending} onClick={()=>run(()=>toggleFavorite(m.id,favorites.has(m.id)))}>{favorites.has(m.id)?"Quitar favorito":"Guardar"}</button>}
         {role==="administrador"&&m.status==="Pendiente"&&<><button className="button button-secondary" disabled={pending} onClick={()=>run(()=>reviewMaterial(m.id,"Rechazado","No cumple los criterios de publicación."))}>Rechazar</button><button className="button" disabled={pending} onClick={()=>run(()=>reviewMaterial(m.id,"Aprobado"))}>Aprobar</button></>}
-        {m.storage_path&&m.status!=="Pendiente"&&<button className="button" disabled={pending} onClick={()=>run(()=>downloadMaterial(m.id),result=>{if(result.data?.url)window.location.assign(result.data.url)})}>Descargar</button>}
+        {m.storage_path&&["Aprobado","Verificado"].includes(m.status)&&<><button className="button button-secondary" disabled={pending} onClick={()=>run(()=>viewMaterial(m.id),result=>{if(result.data?.url)window.location.assign(result.data.url)})}>Consultar</button><button className="button" disabled={pending} onClick={()=>run(()=>downloadMaterial(m.id),result=>{if(result.data?.url)window.location.assign(result.data.url)})}>Descargar</button></>}
       </div></article>)}</div>}
     </section>
   </div>;

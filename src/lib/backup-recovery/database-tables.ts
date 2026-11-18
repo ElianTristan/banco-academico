@@ -162,6 +162,13 @@ export const BACKUP_TABLES: readonly TableDefinition[] = [
     category: "comunidad",
   },
   {
+    name: "material_views",
+    primaryKey: "id",
+    dependencies: ["materials", "profiles"],
+    label: "Registro de Consultas a Recursos",
+    category: "comunidad",
+  },
+  {
     name: "posts",
     primaryKey: "id",
     dependencies: ["profiles", "groups", "subjects"],
