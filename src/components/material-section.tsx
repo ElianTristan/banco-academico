@@ -16,5 +16,5 @@ export async function MaterialSection({role,userId,favoritesOnly=false,mineOnly=
   const favoriteIds=(favoritesResult.data??[]).map(row=>row.material_id);
   let items=materialsResult.data??[];
   if(favoritesOnly&&favoriteIds.length){const {data}=await supabase.from("materials").select("id,title,description,material_type,status,semester,unit,storage_path,download_count,created_at,created_by,review_note,subject_id").in("id",favoriteIds).order("created_at",{ascending:false});items=data??[];}
-  return <MaterialWorkspace items={items} subjects={subjectsResult.data??[]} favoriteIds={favoriteIds} userId={userId} role={role} favoritesOnly={favoritesOnly} mineOnly={mineOnly}/>;
+  return <MaterialWorkspace items={items} subjects={subjectsResult.data??[]} favoriteIds={favoriteIds} userId={userId} role={role} favoritesOnly={favoritesOnly} mineOnly={mineOnly} loadError={materialsResult.error?"No pudimos cargar la biblioteca académica.":null}/>;
 }

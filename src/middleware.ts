@@ -29,7 +29,21 @@ export async function middleware(request: NextRequest) {
   if (!user && isProtected) return NextResponse.redirect(new URL("/login", request.url));
   if (!user) return response;
 
-  const { data: profile } = await supabase.from("profiles").select("role").eq("id", user.id).maybeSingle();
+  const requiresPasswordChange = Boolean(
+    user.app_metadata?.must_change_password === true || user.user_metadata?.must_change_password === true
+  );
+  if (requiresPasswordChange) {
+    if (path === "/recuperar/nueva" || path === "/recuperar/actualizada" || path === "/auth/callback") {
+      return response;
+    }
+    return NextResponse.redirect(new URL("/recuperar/nueva?required=1", request.url));
+  }
+
+  const { data: profile } = await supabase.from("profiles").select("role,is_active").eq("id", user.id).maybeSingle();
+  if (profile?.is_active === false) {
+    if (path === "/login") return response;
+    return NextResponse.redirect(new URL("/login?error=inactive", request.url));
+  }
   if (!isAppRole(profile?.role)) return NextResponse.redirect(new URL("/acceso-pendiente", request.url));
   const home = roleHomes[profile.role];
   if (path === "/" || path === "/login" || path === "/registro") return NextResponse.redirect(new URL(home, request.url));

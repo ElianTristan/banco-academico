@@ -11,7 +11,7 @@ Portal académico del ITSLP construido con Next.js App Router, TypeScript, Tailw
 ## Configuración local
 
 1. Instala dependencias con `npm install`.
-2. Copia `.env.example` como `.env.local` y completa `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` y `NEXT_PUBLIC_SITE_URL=http://localhost:3000`.
+2. Copia `.env.example` como `.env.local` y completa `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` y `NEXT_PUBLIC_SITE_URL=http://localhost:3000`. Para iniciar sesión con número de control o de trabajador también configura `SUPABASE_SERVICE_ROLE_KEY`; solo se usa en el servidor y nunca debe tener el prefijo `NEXT_PUBLIC_`.
 3. Ejecuta `npm run dev` y abre [http://localhost:3000](http://localhost:3000).
 4. Mantén la terminal abierta mientras desarrollas. Detén el servidor con `Control + C`.
 
@@ -28,9 +28,11 @@ npm run preview
 
 ## Autenticación y roles
 
-- El registro público crea cuentas de **alumno**. No permite elegir roles privilegiados.
+- La identidad de Banco Académico usa un símbolo vectorial y lettering reutilizables. La splash de entrada dura aproximadamente dos segundos y aparece una vez por pestaña al abrir una ruta de autenticación; al reducir movimiento se acorta y el login permanece accesible aunque la animación no se ejecute.
+- Las transiciones de rutas, las entradas de secciones, los reveals por scroll y las interacciones comparten tokens de duración y easing en `src/app/globals.css`. `prefers-reduced-motion` mantiene fades breves y elimina el movimiento decorativo; los efectos de hover se reservan para punteros precisos.
+- El registro público permite elegir Estudiante, Docente o Administrador para ver el proceso aplicable, pero solo crea cuentas de **alumno**. El acceso docente requiere revisión y el administrador no se puede registrar públicamente.
 - Un alumno solicita acceso docente desde su perfil. Un administrador valida la solicitud y puede aprobarla desde `/admin/solicitudes`.
-- La primera cuenta administradora se aprovisiona desde el SQL Editor de Supabase siguiendo [docs/SEGURIDAD_Y_ROLES.md](docs/SEGURIDAD_Y_ROLES.md). No uses una clave `service_role` desde el navegador.
+- La primera cuenta administradora se aprovisiona desde el SQL Editor de Supabase siguiendo [docs/SEGURIDAD_Y_ROLES.md](docs/SEGURIDAD_Y_ROLES.md). Administración puede invitar alumnos y docentes desde sus secciones; las invitaciones usan `SUPABASE_SERVICE_ROLE_KEY` exclusivamente en el servidor. No uses esa clave en el navegador.
 - `middleware.ts`, los layouts de servidor, las Server Actions, los RPC y las políticas RLS aplican controles en sus respectivas capas. La interfaz por sí sola no concede permisos.
 - Roles internos vigentes: `alumno`, `docente` y `administrador`. No hay un selector de administrador ni un rol distinto para “profesor”.
 
@@ -38,19 +40,31 @@ Para probar los tres espacios, crea cuentas separadas desde el registro para alu
 
 ## Base de datos
 
-La migración completa lista para SQL Editor es `supabase/BANCO_ACADEMICO_MIGRACION_COMPLETA.sql`. Las fuentes incrementales están en `supabase/migrations/`. Haz un respaldo de Supabase antes de cambios de esquema y no mezcles migraciones parciales.
+Para una base existente, haz un respaldo y aplica en orden las migraciones incrementales pendientes de `supabase/migrations/`; aplica cada migración una sola vez y valida cambios de esquema primero en una copia de pruebas. La 0009 agrega el catálogo académico institucional; la 0010 incorpora el ciclo de vida administrativo de cuentas; la 0013 agrega notificaciones y edición administrativa de cuentas; la 0016 restringe asignaciones académicas a administración y registra cambios de calificaciones; la 0017 agrega el registro de consultas a recursos para reportes de actividad; la 0018 incorpora el alta y edición seguras de administradores. La 0017 no altera ni rellena datos históricos. No vuelvas a ejecutar el SQL consolidado sobre una base ya instalada. Para una instalación nueva, usa `supabase/BANCO_ACADEMICO_MIGRACION_COMPLETA.sql`, que incluye las migraciones hasta la 0018. Las fuentes incrementales están en `supabase/migrations/`.
+
+### Notificaciones y usuarios
+
+- Ejecuta `supabase/migrations/0013_notifications.sql` en Supabase SQL Editor antes de publicar esta versión. La campana actualiza el conteo cada 30 segundos y las publicaciones nuevas (`posts`) generan notificaciones al alumnado inscrito en el grupo; administración también puede enviar un anuncio o tarea a todos los alumnos.
+- En `/admin/usuarios`, selecciona Agregar, Editar o Eliminar. Eliminar desactiva la cuenta y conserva su historial. El rol editable se limita a alumno o docente/bibliotecario.
+- En `/admin/administradores`, una cuenta administradora activa puede crear, editar, desactivar y reactivar otras cuentas administradoras. Cada cambio requiere la contraseña actual del administrador que lo solicita; nunca se puede desactivar la propia cuenta ni dejar el sistema sin una cuenta administradora activa. La nueva cuenta se crea con contraseña temporal y debe cambiarla en su primer acceso. Esta función requiere la migración `0018_administrator_management.sql`.
+- Los datos ficticios para crear cuentas de prueba están en `supabase/seeds/usuarios_demo.md`. Créelas desde administración (no insertes filas directamente en `auth.users`). El formulario de prueba está en `supabase/seeds/notificaciones_demo.sql`: reemplaza `alumno.demo@example.com` por el correo del alumno y ejecútalo. Crea tres notificaciones y no crea usuarios ni contraseñas.
+- Navegación disponible y acciones siguen los roles reales de esta app (`administrador`, `docente`, `alumno`). La app no tiene un modelo de préstamos de libros; el apartado existente de calificaciones/materiales no se cambia para simular préstamos.
+
+Para iniciar y probar localmente, configura `.env.local` como indica la sección anterior, aplica migraciones en Supabase y ejecuta `npm run dev`. Prueba cada rol con cuentas separadas: colapsa y expande la barra, confirma que el estado persiste al recargar, abre la campana, marca una notificación como leída y publica una tarea para un grupo con alumnos inscritos. En administración, crea, edita, busca por matrícula y da de baja una cuenta de prueba.
 
 ## Deployment en Vercel
 
 El proyecto usa Next.js y puede desplegarse en Vercel con el preset detectado automáticamente:
 
 1. Importa el repositorio en Vercel y conserva los comandos predeterminados de Next.js (`npm run build` y salida administrada por Next).
-2. Configura `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` y `NEXT_PUBLIC_SITE_URL` en los entornos Preview y Production. Usa la URL correspondiente a cada entorno. No agregues claves privadas o `service_role` al frontend.
-3. En Supabase Auth, configura las URL de sitio y redirección para el dominio desplegado, incluyendo `/auth/callback` y `/recuperar/nueva`; conserva también las URL locales necesarias para desarrollo.
+2. Configura `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` y `NEXT_PUBLIC_SITE_URL` en los entornos Preview y Production. `NEXT_PUBLIC_SITE_URL` debe ser el origen HTTPS real del deployment correspondiente, nunca `localhost` en Production. Configura `SUPABASE_SERVICE_ROLE_KEY` como variable privada de servidor en ambos entornos si habilitas el acceso por identificador institucional, el límite de intentos o las invitaciones administrativas; nunca la expongas al frontend ni uses un prefijo `NEXT_PUBLIC_`.
+3. En Supabase Auth, define **Site URL** al origen de producción real y permite como **Redirect URL** la ruta exacta `${NEXT_PUBLIC_SITE_URL}/auth/callback` (y los orígenes/rutas locales necesarios para desarrollo). Los enlaces de recuperación y confirmación pasan por ese callback; la aplicación continúa a `/recuperar/nueva` o al inicio según el flujo. No agregues un dominio de producción hasta confirmar cuál usa el proyecto.
 4. Despliega y prueba registro, confirmación de correo, login, recuperación, salida y redirección por rol. Comprueba con cuentas separadas que las rutas ajenas redirigen y que RLS mantiene los datos restringidos.
 
 No hay un deployment ni una URL remota configurados o verificados desde este workspace. `NEXT_PUBLIC_SITE_URL` debe coincidir con el host activo en cada entorno.
 
 ## Estado conocido
 
-La app incluye autenticación con Supabase, paneles por rol, solicitudes docentes, perfiles, materiales privados, favoritos, asesorías y reportes. Algunas rutas de administración todavía muestran listados de lectura genéricos: los CRUD completos de usuarios, materias, grupos, periodos y calificaciones están pendientes. La prueba de autorización con cuentas reales depende de usuarios de prueba en el proyecto Supabase.
+La app incluye autenticación con Supabase, paneles por rol, solicitudes docentes, perfiles, materiales privados, favoritos, asesorías y reportes. Administración puede gestionar carreras, materias, grupos, ciclos escolares, expedientes e inscripciones, e invitar o desactivar alumnos y docentes sin eliminar su historial. Carrera, semestre y especialidad se asignan desde administración. La captura de calificaciones y las acciones de asesorías requieren probarse con cuentas reales de cada rol; este workspace no tiene una conexión de integración a Supabase.
+
+El reporte estadístico de actividad está disponible en `/admin/reportes`; el docente puede consultar `/docente/estadisticas` con el alcance de recursos, grupos y eventos permitido por RLS. El dashboard no consulta calificaciones ni evaluaciones. Utiliza `profiles`, `students`, `teachers`, `subjects`, `careers`, `groups`, `teacher_groups`, `materials`, `material_downloads`, `material_views`, `posts` y `academic_periods`. Las consultas de recursos comienzan a registrarse después de aplicar `0017_platform_activity_reporting.sql`; no existe un historial previo confiable para reconstruir. Las descargas sí utilizan el registro existente `material_downloads`. Los ciclos escolares reutilizan `academic_periods` y se administran desde `/admin/periodos`; nombre y fechas de inicio/fin permiten filtrar publicaciones y actividad, sin modificar registros históricos. Los conteos de actividad se limitan a datos visibles para el rol autenticado y las políticas RLS. “Descargar PDF” abre el diálogo de impresión del navegador (elige “Guardar como PDF”); CSV exporta los registros visibles con los filtros aplicados. La integración con una instancia Supabase real debe verificarse después de aplicar la migración en una base de pruebas; este workspace no ejecuta SQL remoto.

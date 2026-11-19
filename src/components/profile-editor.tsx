@@ -3,26 +3,29 @@
 import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
-import { Camera, Moon, Sun, UserRound } from "lucide-react";
+import { Camera, Moon, Sun } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { saveProfile } from "@/app/academic/actions";
 
-type Career = { id: string; name: string };
+type EnrolledSubject = { id: string; code: string; name: string; specialty: string | null };
 type Props = {
   userId: string; firstName: string; lastName: string; email: string;
-  theme: "light" | "dark"; avatarUrl: string | null;
-  student: { careerId: string; semester: number | null; specialty: string } | null;
-  careers: Career[];
+  theme: "light" | "dark"; avatarUrl: string | null; avatarPath: string | null;
+  student: { semester: number | null; specialty: string | null; careerName: string | null } | null;
+  enrolledSubjects: EnrolledSubject[];
+  subjectsError: string | null;
+  academicError: string | null;
 };
 
 export function ProfileEditor(props: Props) {
   const [theme, setTheme] = useState(props.theme);
-  const [avatarPath, setAvatarPath] = useState("");
+  const [avatarPath, setAvatarPath] = useState(props.avatarPath ?? "");
   const [preview, setPreview] = useState<string | null>(props.avatarUrl);
   const [message, setMessage] = useState("");
   const [busy, startTransition] = useTransition();
   const fileInput = useRef<HTMLInputElement>(null);
   const router = useRouter();
+  const initials = `${props.firstName.trim().charAt(0)}${props.lastName.trim().charAt(0)}`.toLocaleUpperCase() || "BA";
 
   async function uploadPhoto(file?: File) {
     if (!file) return;
@@ -59,7 +62,7 @@ export function ProfileEditor(props: Props) {
   return <section className="panel profile-editor mx-auto w-full max-w-5xl overflow-hidden p-0">
     <div className="profile-cover flex items-center gap-5 px-5 py-7 sm:px-10 sm:py-9">
       <div className="profile-photo-wrap">
-        {preview ? <Image className="profile-photo" src={preview} width={82} height={82} unoptimized alt="Foto de perfil"/> : <span className="profile-photo placeholder"><UserRound size={30}/></span>}
+        {preview ? <Image className="profile-photo" src={preview} width={82} height={82} unoptimized alt="Foto de perfil"/> : <span className="profile-photo profile-photo-initials" aria-label={`Avatar de ${props.firstName} ${props.lastName}`}>{initials}</span>}
         <button className="photo-button" type="button" onClick={() => fileInput.current?.click()} aria-label="Cambiar fotografía"><Camera size={16}/></button>
         <input ref={fileInput} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={event => uploadPhoto(event.target.files?.[0])}/>
       </div>
@@ -71,9 +74,15 @@ export function ProfileEditor(props: Props) {
         <label className="field"><span>Nombre(s)</span><input name="firstName" required maxLength={80} defaultValue={props.firstName}/></label>
         <label className="field"><span>Apellidos</span><input name="lastName" required maxLength={100} defaultValue={props.lastName}/></label>
         {props.student && <>
-          <label className="field"><span>Carrera</span><select name="careerId" defaultValue={props.student.careerId}><option value="">Selecciona tu carrera</option>{props.careers.map(career => <option value={career.id} key={career.id}>{career.name}</option>)}</select></label>
-          <label className="field"><span>Semestre</span><select name="semester" defaultValue={props.student.semester ?? ""}><option value="">Selecciona</option>{Array.from({length: 20}, (_,i) => i+1).map(semester => <option key={semester} value={semester}>{semester}° semestre</option>)}</select></label>
-          <label className="field fullcol"><span>Especialidad</span><input name="specialty" maxLength={120} placeholder="Ej. Desarrollo de software" defaultValue={props.student.specialty}/></label>
+          <div className="field"><span>Carrera</span><p>{props.student.careerName ?? "Sin asignar"}</p><small className="field-help">La asignación y sus cambios los realiza administración.</small></div>
+          <div className="field"><span>Semestre</span><p>{props.student.semester === null ? "Sin asignar" : `${props.student.semester}° semestre`}</p></div>
+          <div className="field fullcol"><span>Especialidad</span><p>{props.student.specialty ?? "Sin asignar"}</p></div>
+          <section className="profile-subjects fullcol" aria-labelledby="profile-subjects-title">
+            <div><h3 id="profile-subjects-title">Materias inscritas</h3><p className="muted">Consulta tu carga vigente. Las inscripciones las administra la institución.</p></div>
+            {props.academicError ? <p className="form-error" role="alert">{props.academicError}</p> : props.subjectsError ? <p className="form-error" role="alert">{props.subjectsError}</p> : props.enrolledSubjects.length ? <ul>
+              {props.enrolledSubjects.map(subject => <li key={subject.id}><span>{subject.name}</span><small>{subject.code}{subject.specialty ? ` · ${subject.specialty}` : ""}</small></li>)}
+            </ul> : <p className="empty">No tienes materias inscritas en este periodo.</p>}
+          </section>
         </>}
       </div>
       <div className="theme-row"><div><strong>Apariencia</strong><p className="muted">Elige cómo quieres ver el Banco Académico.</p></div><div className="theme-picker" role="group" aria-label="Tema visual">

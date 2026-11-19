@@ -1,7 +1,7 @@
 -- BANCO ACADEMICO — INSTALACION COMPLETA E IDEMPOTENTE
--- Pega TODO este archivo en Supabase > SQL Editor y pulsa Run.
--- Incluye las cuatro migraciones ordenadas. No elimina tablas ni registros existentes.
--- Puede ejecutarse de nuevo: reemplaza políticas/funciones y preserva los datos.
+-- Solo para instalar una base nueva: pega TODO este archivo en Supabase > SQL Editor y pulsa Run.
+-- Para una base existente, aplica únicamente las migraciones incrementales pendientes.
+-- No elimina tablas ni registros existentes; puede repetirse en instalaciones nuevas.
 
 BEGIN;
 
@@ -745,4 +745,2059 @@ grant execute on function public.review_teacher_application(uuid, text, text) to
 grant execute on function public.is_teacher_of(uuid) to authenticated;
 grant execute on function public.is_enrolled_in(uuid) to authenticated;
 
+-- ===== 0005_server_login_identifier_lookup.sql =====
+create or replace function public.resolve_login_email(target_role text, target_identifier text)
+returns text
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  target_user_id uuid;
+begin
+  if target_role is null
+     or target_role not in ('alumno', 'docente')
+     or target_identifier is null
+     or length(btrim(target_identifier)) not between 2 and 80 then
+    return null;
+  end if;
+
+  if target_role = 'alumno' then
+    select student.id into target_user_id
+    from public.students as student
+    where student.control_number = btrim(target_identifier);
+  else
+    select teacher.id into target_user_id
+    from public.teachers as teacher
+    where teacher.employee_number = btrim(target_identifier);
+  end if;
+
+  if target_user_id is null then
+    return null;
+  end if;
+
+  return (
+    select profile.email
+    from public.profiles as profile
+    where profile.id = target_user_id
+      and profile.role::text = target_role
+  );
+end;
+$$;
+
+revoke all on function public.resolve_login_email(text, text) from public, anon, authenticated;
+grant execute on function public.resolve_login_email(text, text) to service_role;
+
+-- ===== 0006_server_auth_attempts.sql =====
+create table if not exists public.login_attempt_limits (
+  bucket_hash text primary key check (bucket_hash ~ '^[0-9a-f]{64}$'),
+  failed_attempts smallint not null default 0 check (failed_attempts between 0 and 3),
+  window_started_at timestamptz not null default now(),
+  locked_until timestamptz,
+  generation bigint not null default 0,
+  updated_at timestamptz not null default now()
+);
+create index if not exists login_attempt_limits_updated_idx
+  on public.login_attempt_limits(updated_at);
+
+create table if not exists public.login_attempt_reservations (
+  id uuid primary key default gen_random_uuid(),
+  bucket_hash text not null references public.login_attempt_limits(bucket_hash) on delete cascade,
+  generation bigint not null,
+  created_at timestamptz not null default now()
+);
+create index if not exists login_attempt_reservations_bucket_idx
+  on public.login_attempt_reservations(bucket_hash, generation, created_at);
+
+alter table public.login_attempt_limits enable row level security;
+alter table public.login_attempt_reservations enable row level security;
+revoke all on public.login_attempt_limits, public.login_attempt_reservations from public, anon, authenticated;
+grant all on public.login_attempt_limits, public.login_attempt_reservations to service_role;
+
+create or replace function public.reserve_login_attempt(
+  target_identifier text,
+  target_client_key text
+) returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  current_bucket text;
+  attempt_state public.login_attempt_limits%rowtype;
+  pending_count integer;
+  reservation uuid;
+begin
+  if target_identifier is null
+     or length(btrim(target_identifier)) not between 2 and 254
+     or target_client_key is null
+     or length(btrim(target_client_key)) not between 1 and 128 then
+    return jsonb_build_object('allowed', false, 'failed_attempts', 0, 'locked_until', null);
+  end if;
+
+  current_bucket := encode(
+    extensions.digest(lower(btrim(target_identifier)) || E'\n' || btrim(target_client_key), 'sha256'),
+    'hex'
+  );
+
+  insert into public.login_attempt_limits(bucket_hash)
+  values (current_bucket)
+  on conflict (bucket_hash) do nothing;
+
+  select * into attempt_state
+  from public.login_attempt_limits
+  where bucket_hash = current_bucket
+  for update;
+
+  if attempt_state.locked_until is not null and attempt_state.locked_until <= now() then
+    delete from public.login_attempt_reservations where bucket_hash = current_bucket;
+    update public.login_attempt_limits
+    set failed_attempts = 0, locked_until = null, window_started_at = now(),
+        generation = generation + 1, updated_at = now()
+    where bucket_hash = current_bucket
+    returning * into attempt_state;
+  elsif attempt_state.window_started_at <= now() - interval '15 minutes'
+        and attempt_state.locked_until is null then
+    delete from public.login_attempt_reservations where bucket_hash = current_bucket;
+    update public.login_attempt_limits
+    set failed_attempts = 0, window_started_at = now(),
+        generation = generation + 1, updated_at = now()
+    where bucket_hash = current_bucket
+    returning * into attempt_state;
+  end if;
+
+  if attempt_state.locked_until is not null and attempt_state.locked_until > now() then
+    return jsonb_build_object(
+      'allowed', false,
+      'failed_attempts', attempt_state.failed_attempts,
+      'locked_until', attempt_state.locked_until
+    );
+  end if;
+
+  delete from public.login_attempt_reservations
+  where bucket_hash = current_bucket
+    and created_at <= now() - interval '10 minutes';
+
+  select count(*) into pending_count
+  from public.login_attempt_reservations
+  where bucket_hash = current_bucket and generation = attempt_state.generation;
+
+  if attempt_state.failed_attempts + pending_count >= 3 then
+    return jsonb_build_object(
+      'allowed', false,
+      'failed_attempts', attempt_state.failed_attempts,
+      'locked_until', null
+    );
+  end if;
+
+  insert into public.login_attempt_reservations(bucket_hash, generation)
+  values (current_bucket, attempt_state.generation)
+  returning id into reservation;
+
+  with expired as (
+    select bucket_hash
+    from public.login_attempt_limits
+    where updated_at <= now() - interval '1 day'
+    order by updated_at
+    limit 100
+  )
+  delete from public.login_attempt_limits as limits
+  using expired
+  where limits.bucket_hash = expired.bucket_hash
+    and limits.bucket_hash <> current_bucket;
+
+  return jsonb_build_object(
+    'allowed', true,
+    'reservation_id', reservation,
+    'failed_attempts', attempt_state.failed_attempts,
+    'locked_until', attempt_state.locked_until
+  );
+end;
+$$;
+
+create or replace function public.complete_login_attempt(
+  target_reservation uuid,
+  target_outcome text,
+  target_user_id uuid default null
+) returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  reservation_state public.login_attempt_reservations%rowtype;
+  attempt_state public.login_attempt_limits%rowtype;
+  audit_logged boolean := true;
+  audit_error text := null;
+  event_type public.access_event;
+begin
+  if target_outcome not in ('failure', 'success', 'release') then
+    raise exception 'Invalid login-attempt outcome';
+  end if;
+
+  select * into reservation_state
+  from public.login_attempt_reservations
+  where id = target_reservation;
+  if not found then
+    return jsonb_build_object('failed_attempts', 0, 'locked_until', null, 'audit_logged', true);
+  end if;
+
+  select * into attempt_state
+  from public.login_attempt_limits
+  where bucket_hash = reservation_state.bucket_hash
+  for update;
+
+  select * into reservation_state
+  from public.login_attempt_reservations
+  where id = target_reservation
+  for update;
+  if not found then
+    return jsonb_build_object('failed_attempts', attempt_state.failed_attempts,
+                              'locked_until', attempt_state.locked_until, 'audit_logged', true);
+  end if;
+
+  if reservation_state.generation <> attempt_state.generation then
+    delete from public.login_attempt_reservations where id = target_reservation;
+    return jsonb_build_object('failed_attempts', attempt_state.failed_attempts,
+                              'locked_until', attempt_state.locked_until, 'audit_logged', true);
+  end if;
+
+  delete from public.login_attempt_reservations where id = target_reservation;
+
+  if target_outcome = 'release' then
+    update public.login_attempt_limits set updated_at = now()
+    where bucket_hash = reservation_state.bucket_hash;
+    return jsonb_build_object('failed_attempts', attempt_state.failed_attempts,
+                              'locked_until', attempt_state.locked_until, 'audit_logged', true);
+  elsif target_outcome = 'success' then
+    update public.login_attempt_limits
+    set failed_attempts = 0, locked_until = null, window_started_at = now(),
+        generation = generation + 1, updated_at = now()
+    where bucket_hash = reservation_state.bucket_hash;
+    attempt_state.failed_attempts := 0;
+    attempt_state.locked_until := null;
+    delete from public.login_attempt_reservations
+    where bucket_hash = reservation_state.bucket_hash;
+    event_type := 'LOGIN';
+  else
+    update public.login_attempt_limits
+    set failed_attempts = least(failed_attempts + 1, 3),
+        locked_until = case when failed_attempts + 1 >= 3 then now() + interval '15 minutes' else null end,
+        updated_at = now()
+    where bucket_hash = reservation_state.bucket_hash
+    returning * into attempt_state;
+    event_type := 'LOGIN_FAILED';
+  end if;
+
+  begin
+    insert into public.access_logs(user_id, event_type, succeeded, session_info)
+    values (
+      target_user_id,
+      event_type,
+      target_outcome = 'success',
+      jsonb_build_object('source', 'web')
+    );
+  exception when others then
+    audit_logged := false;
+    get stacked diagnostics audit_error = message_text;
+  end;
+
+  return jsonb_build_object(
+    'failed_attempts', attempt_state.failed_attempts,
+    'locked_until', attempt_state.locked_until,
+    'audit_logged', audit_logged,
+    'audit_error', audit_error
+  );
+end;
+$$;
+
+create or replace function public.record_auth_event(
+  target_user_id uuid,
+  target_event text
+) returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  audit_error text := null;
+begin
+  if target_event not in ('LOGOUT', 'PASSWORD_RESET') or target_user_id is null then
+    raise exception 'Invalid authentication audit event';
+  end if;
+
+  begin
+    insert into public.access_logs(user_id, event_type, succeeded, session_info)
+    values (target_user_id, target_event::public.access_event, true, jsonb_build_object('source', 'web'));
+  exception when others then
+    get stacked diagnostics audit_error = message_text;
+    return jsonb_build_object('audit_logged', false, 'audit_error', audit_error);
+  end;
+
+  return jsonb_build_object('audit_logged', true);
+end;
+$$;
+
+revoke all on function public.reserve_login_attempt(text, text) from public, anon, authenticated;
+revoke all on function public.complete_login_attempt(uuid, text, uuid) from public, anon, authenticated;
+revoke all on function public.record_auth_event(uuid, text) from public, anon, authenticated;
+grant execute on function public.reserve_login_attempt(text, text) to service_role;
+grant execute on function public.complete_login_attempt(uuid, text, uuid) to service_role;
+grant execute on function public.record_auth_event(uuid, text) to service_role;
+
+drop policy if exists "signed in users record own events" on public.access_logs;
+drop policy if exists "signed in users record own session events" on public.access_logs;
+drop policy if exists "admins read access logs" on public.access_logs;
+create policy "admins read access logs" on public.access_logs
+  for select to authenticated using (public.is_admin());
+revoke insert, update, delete on public.access_logs from public, anon, authenticated;
+
+-- ===== 0007_account_auth_attempt_limits.sql =====
+create or replace function public.reserve_account_login_attempt(
+  target_identifier text
+) returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  current_bucket text;
+  attempt_state public.login_attempt_limits%rowtype;
+  pending_count integer;
+  reservation uuid;
+begin
+  if target_identifier is null
+     or length(btrim(target_identifier)) not between 2 and 254 then
+    return jsonb_build_object('allowed', false, 'failed_attempts', 0, 'locked_until', null);
+  end if;
+
+  current_bucket := encode(
+    extensions.digest(lower(btrim(target_identifier)), 'sha256'),
+    'hex'
+  );
+
+  insert into public.login_attempt_limits(bucket_hash)
+  values (current_bucket)
+  on conflict (bucket_hash) do nothing;
+
+  select * into attempt_state
+  from public.login_attempt_limits
+  where bucket_hash = current_bucket
+  for update;
+
+  if attempt_state.locked_until is not null and attempt_state.locked_until <= now() then
+    delete from public.login_attempt_reservations where bucket_hash = current_bucket;
+    update public.login_attempt_limits
+    set failed_attempts = 0, locked_until = null, window_started_at = now(),
+        generation = generation + 1, updated_at = now()
+    where bucket_hash = current_bucket
+    returning * into attempt_state;
+  elsif attempt_state.window_started_at <= now() - interval '15 minutes'
+        and attempt_state.locked_until is null then
+    delete from public.login_attempt_reservations where bucket_hash = current_bucket;
+    update public.login_attempt_limits
+    set failed_attempts = 0, window_started_at = now(),
+        generation = generation + 1, updated_at = now()
+    where bucket_hash = current_bucket
+    returning * into attempt_state;
+  end if;
+
+  if attempt_state.locked_until is not null and attempt_state.locked_until > now() then
+    return jsonb_build_object(
+      'allowed', false,
+      'failed_attempts', attempt_state.failed_attempts,
+      'locked_until', attempt_state.locked_until
+    );
+  end if;
+
+  delete from public.login_attempt_reservations
+  where bucket_hash = current_bucket
+    and created_at <= now() - interval '10 minutes';
+
+  select count(*) into pending_count
+  from public.login_attempt_reservations
+  where bucket_hash = current_bucket and generation = attempt_state.generation;
+
+  if attempt_state.failed_attempts + pending_count >= 3 then
+    return jsonb_build_object(
+      'allowed', false,
+      'failed_attempts', attempt_state.failed_attempts,
+      'locked_until', null
+    );
+  end if;
+
+  insert into public.login_attempt_reservations(bucket_hash, generation)
+  values (current_bucket, attempt_state.generation)
+  returning id into reservation;
+
+  with expired as (
+    select bucket_hash
+    from public.login_attempt_limits
+    where updated_at <= now() - interval '1 day'
+    order by updated_at
+    limit 100
+  )
+  delete from public.login_attempt_limits as limits
+  using expired
+  where limits.bucket_hash = expired.bucket_hash
+    and limits.bucket_hash <> current_bucket;
+
+  return jsonb_build_object(
+    'allowed', true,
+    'reservation_id', reservation,
+    'failed_attempts', attempt_state.failed_attempts,
+    'locked_until', attempt_state.locked_until
+  );
+end;
+$$;
+
+revoke all on function public.reserve_account_login_attempt(text) from public, anon, authenticated;
+grant execute on function public.reserve_account_login_attempt(text) to service_role;
+
+-- ===== 0008_reset_login_attempts_after_password_recovery.sql =====
+create or replace function public.reset_account_login_attempts(
+  target_user_id uuid
+) returns boolean
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  account_email text;
+  current_bucket text;
+  attempt_state public.login_attempt_limits%rowtype;
+begin
+  if target_user_id is null then
+    raise exception 'A user id is required to reset login attempts';
+  end if;
+
+  select lower(btrim(profile.email)) into account_email
+  from public.profiles as profile
+  where profile.id = target_user_id;
+
+  if account_email is null then
+    raise exception 'The account email could not be found';
+  end if;
+
+  current_bucket := encode(extensions.digest(account_email, 'sha256'), 'hex');
+
+  select * into attempt_state
+  from public.login_attempt_limits
+  where bucket_hash = current_bucket
+  for update;
+
+  if not found then
+    return true;
+  end if;
+
+  delete from public.login_attempt_reservations
+  where bucket_hash = current_bucket;
+
+  update public.login_attempt_limits
+  set failed_attempts = 0,
+      locked_until = null,
+      window_started_at = now(),
+      generation = generation + 1,
+      updated_at = now()
+  where bucket_hash = current_bucket;
+
+  return true;
+end;
+$$;
+
+revoke all on function public.reset_account_login_attempts(uuid) from public, anon, authenticated;
+grant execute on function public.reset_account_login_attempts(uuid) to service_role;
+
+-- ===== 0009_fixed_academic_profile_and_subject_catalog.sql =====
+-- Keep the institutional program fixed without rewriting existing student rows.
+insert into public.careers (name, code, description, active)
+values ('Ingeniería en Sistemas', 'ING-SIS', 'Programa académico institucional del Banco Académico.', true)
+on conflict do nothing;
+
+do $$
+begin
+  if not exists (
+    select 1 from public.careers
+    where name = 'Ingeniería en Sistemas' and active
+  ) then
+    raise exception 'No se pudo establecer la carrera institucional Ingeniería en Sistemas; revisa conflictos en public.careers.';
+  end if;
+end;
+$$;
+
+create table if not exists public.academic_specialties (
+  code text primary key,
+  name text not null unique,
+  active boolean not null default true
+);
+
+insert into public.academic_specialties (code, name)
+values
+  ('ciberseguridad', 'Ciberseguridad'),
+  ('gestion_servicios_ti', 'Gestión de Servicios de TI')
+on conflict (code) do update set name = excluded.name, active = true;
+
+create table if not exists public.subject_specialties (
+  subject_id uuid not null references public.subjects(id) on delete cascade,
+  specialty_code text not null references public.academic_specialties(code) on delete restrict,
+  primary key (subject_id, specialty_code)
+);
+
+alter table public.academic_specialties enable row level security;
+alter table public.subject_specialties enable row level security;
+
+drop policy if exists "academic specialties authenticated read" on public.academic_specialties;
+create policy "academic specialties authenticated read"
+  on public.academic_specialties for select to authenticated using (true);
+drop policy if exists "academic specialties admin manage" on public.academic_specialties;
+create policy "academic specialties admin manage"
+  on public.academic_specialties for all to authenticated
+  using (public.is_admin()) with check (public.is_admin());
+drop policy if exists "subject specialties authenticated read" on public.subject_specialties;
+create policy "subject specialties authenticated read"
+  on public.subject_specialties for select to authenticated using (true);
+drop policy if exists "subject specialties admin manage" on public.subject_specialties;
+create policy "subject specialties admin manage"
+  on public.subject_specialties for all to authenticated
+  using (public.is_admin()) with check (public.is_admin());
+
+grant select, insert, update, delete on public.academic_specialties to authenticated;
+grant select, insert, update, delete on public.subject_specialties to authenticated;
+
+-- Preserve the seed across transaction boundaries used by SQL editors.
+create temporary table academic_catalog_seed (
+  code text primary key,
+  name text not null,
+  specialty_code text
+);
+
+insert into academic_catalog_seed (code, name, specialty_code) values
+  ('IS-GEN-001', 'Cálculo Diferencial', null),
+  ('IS-GEN-002', 'Fundamentos de Programación', null),
+  ('IS-GEN-003', 'Taller de Ética', null),
+  ('IS-GEN-004', 'Matemáticas Discretas', null),
+  ('IS-GEN-005', 'Administración para Informática', null),
+  ('IS-GEN-006', 'Cálculo Integral', null),
+  ('IS-GEN-007', 'Programación Orientada a Objetos', null),
+  ('IS-GEN-008', 'Contabilidad Financiera', null),
+  ('IS-GEN-009', 'Química', null),
+  ('IS-GEN-010', 'Álgebra Lineal', null),
+  ('IS-GEN-011', 'Cálculo Vectorial', null),
+  ('IS-GEN-012', 'Estructura de Datos', null),
+  ('IS-GEN-013', 'Cultura Empresarial', null),
+  ('IS-GEN-014', 'Electricidad y Magnetismo', null),
+  ('IS-GEN-015', 'Investigación de Operaciones', null),
+  ('IS-GEN-016', 'Ecuaciones Diferenciales', null),
+  ('IS-GEN-017', 'Métodos Numéricos', null),
+  ('IS-GEN-018', 'Fundamentos de Telecomunicaciones', null),
+  ('IS-GEN-019', 'Taller de Investigación I', null),
+  ('IS-GEN-020', 'Tópicos de Programación', null),
+  ('IS-GEN-021', 'Sistemas Operativos', null),
+  ('IS-GEN-022', 'Fundamentos de Bases de Datos', null),
+  ('IS-GEN-023', 'Taller de Bases de Datos', null),
+  ('IS-GEN-024', 'Fundamentos de Ingeniería de Software', null),
+  ('IS-GEN-025', 'Redes de Computadoras', null),
+  ('IS-GEN-026', 'Graficación', null),
+  ('IS-GEN-027', 'Desarrollo Sustentable', null),
+  ('IS-GEN-028', 'Administración de Bases de Datos', null),
+  ('IS-GEN-029', 'Ingeniería de Software', null),
+  ('IS-GEN-030', 'Conmutación y Enrutamiento en Redes de Datos', null),
+  ('IS-GEN-031', 'Lenguajes y Autómatas I', null),
+  ('IS-GEN-032', 'Taller de Sistemas Operativos', null),
+  ('IS-GEN-033', 'Taller de Administración', null),
+  ('IS-GEN-034', 'Lenguajes y Autómatas II', null),
+  ('IS-GEN-035', 'Programación Web', null),
+  ('IS-GEN-036', 'Administración de Redes', null),
+  ('IS-GEN-037', 'Taller de Investigación II', null),
+  ('IS-GEN-038', 'Sistemas Distribuidos', null),
+  ('IS-GEN-039', 'Gestión de Proyectos de Software', null),
+  ('IS-GEN-040', 'Programación Lógica y Funcional', null),
+  ('IS-GEN-041', 'Inteligencia Artificial', null),
+  ('IS-GEN-042', 'Desarrollo de Aplicaciones Móviles', null),
+  ('IS-GEN-043', 'Gestión de la Calidad del Software', null),
+  ('IS-GEN-044', 'Residencia Profesional', null),
+  ('IS-GEN-045', 'Servicio Social', null),
+  ('IS-GEN-046', 'Actividades Complementarias', null),
+  ('IS-CIB-001', 'Auditoría de Seguridad', 'ciberseguridad'),
+  ('IS-CIB-002', 'Seguridad de las Tecnologías de Información', 'ciberseguridad'),
+  ('IS-CIB-003', 'Gestión de Operaciones', 'ciberseguridad'),
+  ('IS-CIB-004', 'Tópicos Avanzados de Redes', 'ciberseguridad'),
+  ('IS-CIB-005', 'Tópicos de Seguridad Informática', 'ciberseguridad'),
+  ('IS-GSTI-001', 'Gestión de Operaciones de TI', 'gestion_servicios_ti'),
+  ('IS-GSTI-002', 'Big Data y Análisis', 'gestion_servicios_ti'),
+  ('IS-GSTI-003', 'Internet de las Cosas', 'gestion_servicios_ti'),
+  ('IS-GSTI-004', 'Taller de Habilidades Directivas', 'gestion_servicios_ti'),
+  ('IS-GSTI-005', 'Gestión de Servicios y Gobernanza de TI', 'gestion_servicios_ti'),
+  ('IS-GSTI-006', 'Ciberseguridad', 'gestion_servicios_ti');
+
+do $$
+declare institutional_career uuid;
+begin
+  select id into institutional_career
+  from public.careers
+  where name = 'Ingeniería en Sistemas' and active;
+
+  if exists (
+    select 1
+    from public.subjects subject
+    join academic_catalog_seed catalog on lower(btrim(subject.name)) = lower(btrim(catalog.name))
+    where subject.career_id = institutional_career or subject.career_id is null
+    group by lower(btrim(subject.name))
+    having count(*) > 1
+  ) then
+    raise exception 'Hay materias duplicadas en el catálogo institucional. Corrige los duplicados conservando sus referencias antes de aplicar esta migración.';
+  end if;
+end;
+$$;
+
+-- Adopt only exact-name legacy catalog rows that have not yet been linked to a career.
+update public.subjects subject
+set career_id = career.id
+from public.careers career, academic_catalog_seed catalog
+where career.name = 'Ingeniería en Sistemas'
+  and subject.career_id is null
+  and lower(btrim(subject.name)) = lower(btrim(catalog.name));
+
+insert into public.subjects (career_id, code, name, credits, semester, active)
+select career.id, catalog.code, catalog.name, 0, null, true
+from public.careers career
+cross join academic_catalog_seed catalog
+where career.name = 'Ingeniería en Sistemas'
+  and not exists (
+    select 1 from public.subjects existing
+    where existing.career_id = career.id
+      and lower(btrim(existing.name)) = lower(btrim(catalog.name))
+  )
+on conflict do nothing;
+
+do $$
+begin
+  if exists (
+    select 1
+    from academic_catalog_seed catalog
+    where not exists (
+      select 1
+      from public.subjects subject
+      join public.careers career on career.id = subject.career_id
+      where career.name = 'Ingeniería en Sistemas'
+        and lower(btrim(subject.name)) = lower(btrim(catalog.name))
+    )
+  ) then
+    raise exception 'No se pudo completar el catálogo; verifica conflictos de códigos o nombres en public.subjects.';
+  end if;
+end;
+$$;
+
+create unique index if not exists subjects_career_name_normalized_idx
+  on public.subjects (career_id, lower(btrim(name)))
+  where career_id is not null;
+
+insert into public.subject_specialties (subject_id, specialty_code)
+select subject.id, catalog.specialty_code
+from academic_catalog_seed catalog
+join public.careers career on career.name = 'Ingeniería en Sistemas'
+join public.subjects subject
+  on subject.career_id = career.id
+ and lower(btrim(subject.name)) = lower(btrim(catalog.name))
+where catalog.specialty_code is not null
+on conflict do nothing;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.students'::regclass
+      and conname = 'students_semester_range_1_13'
+  ) then
+    alter table public.students
+      add constraint students_semester_range_1_13
+      check (semester is null or semester between 1 and 13) not valid;
+  end if;
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.students'::regclass
+      and conname = 'students_specialty_allowed'
+  ) then
+    alter table public.students
+      add constraint students_specialty_allowed
+      check (specialty is null or specialty in ('Ciberseguridad', 'Gestión de Servicios de TI')) not valid;
+  end if;
+end;
+$$;
+
+create or replace function public.guard_student_academic_profile()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+declare institutional_career uuid;
+begin
+  select id into institutional_career
+  from public.careers
+  where name = 'Ingeniería en Sistemas' and active;
+
+  if institutional_career is null then
+    raise exception 'La carrera institucional no está configurada';
+  end if;
+
+  if new.career_id is null then
+    new.career_id := institutional_career;
+  elsif new.career_id is distinct from institutional_career then
+    raise exception 'Solo se permite Ingeniería en Sistemas';
+  end if;
+
+  if new.semester is not null and new.semester not between 1 and 13 then
+    raise exception 'El semestre debe estar entre 1 y 13';
+  end if;
+
+  if new.specialty is not null
+     and new.specialty not in ('Ciberseguridad', 'Gestión de Servicios de TI') then
+    raise exception 'La especialidad no está permitida';
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists students_academic_profile_guard on public.students;
+create trigger students_academic_profile_guard
+  before insert or update of career_id, semester, specialty on public.students
+  for each row execute function public.guard_student_academic_profile();
+revoke all on function public.guard_student_academic_profile() from public;
+
+create or replace function public.save_student_academic_profile(
+  target_first_name text,
+  target_last_name text,
+  target_preferred_theme text,
+  target_avatar_path text,
+  target_semester smallint,
+  target_specialty text
+) returns void
+language plpgsql
+security invoker
+set search_path = public
+as $$
+declare institutional_career uuid;
+begin
+  if auth.uid() is null or public.current_role() <> 'alumno' then
+    raise exception 'Solo un alumno autenticado puede actualizar su perfil académico';
+  end if;
+  if length(btrim(coalesce(target_first_name, ''))) not between 1 and 80
+     or length(btrim(coalesce(target_last_name, ''))) not between 1 and 100 then
+    raise exception 'El nombre o los apellidos no son válidos';
+  end if;
+  if target_preferred_theme not in ('light', 'dark') then
+    raise exception 'El tema visual no es válido';
+  end if;
+  if target_semester is null or target_semester not between 1 and 13 then
+    raise exception 'El semestre debe estar entre 1 y 13';
+  end if;
+  if target_specialty is not null
+     and target_specialty not in ('Ciberseguridad', 'Gestión de Servicios de TI') then
+    raise exception 'La especialidad no está permitida';
+  end if;
+  if coalesce(target_avatar_path, '') <> ''
+     and split_part(target_avatar_path, '/', 1) <> auth.uid()::text then
+    raise exception 'La fotografía no pertenece a la cuenta';
+  end if;
+
+  select id into institutional_career
+  from public.careers
+  where name = 'Ingeniería en Sistemas' and active;
+  if institutional_career is null then
+    raise exception 'La carrera institucional no está configurada';
+  end if;
+
+  update public.profiles
+  set first_name = btrim(target_first_name),
+      last_name = btrim(target_last_name),
+      preferred_theme = target_preferred_theme,
+      avatar_path = case when coalesce(target_avatar_path, '') = '' then avatar_path else target_avatar_path end,
+      updated_at = now()
+  where id = auth.uid();
+  if not found then
+    raise exception 'No se encontró el perfil de la cuenta';
+  end if;
+
+  update public.students
+  set career_id = institutional_career,
+      semester = target_semester,
+      specialty = nullif(target_specialty, '')
+  where id = auth.uid();
+  if not found then
+    raise exception 'No se encontró el registro académico del alumno';
+  end if;
+
+  insert into public.activity_logs (user_id, action, module, description)
+  values (auth.uid(), 'Actualizó su perfil académico', 'Perfil', 'Datos personales, carrera, semestre y especialidad');
+end;
+$$;
+
+revoke all on function public.save_student_academic_profile(text, text, text, text, smallint, text)
+  from public, anon;
+grant execute on function public.save_student_academic_profile(text, text, text, text, smallint, text)
+  to authenticated;
+
+drop table academic_catalog_seed;
+
+-- ===== 0010_admin_user_lifecycle.sql =====
+alter table public.profiles
+  add column if not exists is_active boolean not null default true;
+
+create or replace function public.current_role()
+returns public.app_role
+language sql stable security definer set search_path = public
+as $$
+  select role
+  from public.profiles
+  where id = auth.uid() and is_active
+$$;
+
+create or replace function public.guard_profile_active_status()
+returns trigger
+language plpgsql set search_path = public
+as $$
+begin
+  if new.is_active is distinct from old.is_active
+     and current_user not in ('postgres', 'service_role') then
+    raise exception 'El estado de acceso solo puede cambiar mediante el flujo administrativo seguro';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists profiles_active_status_guard on public.profiles;
+create trigger profiles_active_status_guard
+  before update of is_active on public.profiles
+  for each row execute function public.guard_profile_active_status();
+revoke all on function public.guard_profile_active_status() from public;
+
+create or replace function public.deactivate_managed_user(target_user_id uuid)
+returns void
+language plpgsql security definer set search_path = public
+as $$
+declare
+  target_profile public.profiles%rowtype;
+begin
+  if auth.uid() is null or public.current_role() is distinct from 'administrador' then
+    raise exception 'Solo un administrador activo puede desactivar cuentas';
+  end if;
+  if target_user_id = auth.uid() then
+    raise exception 'No puedes desactivar tu propia cuenta';
+  end if;
+
+  perform pg_advisory_xact_lock(17462, 1);
+  select * into target_profile
+  from public.profiles
+  where id = target_user_id
+  for update;
+
+  if not found then
+    raise exception 'No se encontró la cuenta seleccionada';
+  end if;
+  if not target_profile.is_active then
+    raise exception 'La cuenta ya está desactivada';
+  end if;
+  if target_profile.role = 'administrador'
+     and (select count(*) from public.profiles where role = 'administrador' and is_active) <= 1 then
+    raise exception 'Debe permanecer al menos una cuenta administradora activa';
+  end if;
+
+  update public.profiles
+  set is_active = false, updated_at = now()
+  where id = target_user_id;
+
+  insert into public.activity_logs (user_id, action, module, record_id, description, details)
+  values (
+    auth.uid(),
+    'ADMIN_USER_DEACTIVATED',
+    'Usuarios',
+    target_user_id::text,
+    'Desactivó una cuenta sin eliminar su historial académico',
+    jsonb_build_object('role', target_profile.role)
+  );
+end;
+$$;
+
+revoke all on function public.deactivate_managed_user(uuid) from public, anon;
+grant execute on function public.deactivate_managed_user(uuid) to authenticated;
+
+create or replace function public.reactivate_managed_user(target_user_id uuid)
+returns void
+language plpgsql security definer set search_path = public
+as $$
+declare target_role public.app_role;
+begin
+  if auth.uid() is null or public.current_role() is distinct from 'administrador' then
+    raise exception 'Solo un administrador activo puede reactivar cuentas';
+  end if;
+  if target_user_id = auth.uid() then
+    raise exception 'No puedes reactivar tu propia cuenta';
+  end if;
+
+  select role into target_role
+  from public.profiles
+  where id = target_user_id and not is_active
+  for update;
+  if not found then
+    raise exception 'La cuenta no existe o ya está activa';
+  end if;
+
+  update public.profiles
+  set is_active = true, updated_at = now()
+  where id = target_user_id;
+
+  insert into public.activity_logs (user_id, action, module, record_id, description, details)
+  values (
+    auth.uid(),
+    'ADMIN_USER_REACTIVATED',
+    'Usuarios',
+    target_user_id::text,
+    'Reactivó una cuenta conservando su historial académico',
+    jsonb_build_object('role', target_role)
+  );
+end;
+$$;
+
+revoke all on function public.reactivate_managed_user(uuid) from public, anon;
+grant execute on function public.reactivate_managed_user(uuid) to authenticated;
+
+create or replace function public.finalize_admin_created_user(
+  target_user_id uuid,
+  target_admin_id uuid,
+  target_role text,
+  target_control_number text,
+  target_employee_number text,
+  target_department text
+) returns void
+language plpgsql security definer set search_path = public
+as $$
+declare institutional_career uuid;
+begin
+  if coalesce(auth.role(), '') <> 'service_role' then
+    raise exception 'Esta operación requiere el servicio administrativo seguro';
+  end if;
+  if target_role not in ('alumno', 'docente') then
+    raise exception 'Solo se pueden dar de alta cuentas de alumno o docente';
+  end if;
+  if not exists (
+    select 1 from public.profiles
+    where id = target_admin_id and role = 'administrador' and is_active
+  ) then
+    raise exception 'La cuenta administradora ya no está activa';
+  end if;
+
+  update public.profiles
+  set role = target_role::public.app_role, updated_at = now()
+  where id = target_user_id and is_active;
+  if not found then
+    raise exception 'No se encontró el perfil de la cuenta nueva';
+  end if;
+
+  if target_role = 'alumno' then
+    select id into institutional_career
+    from public.careers
+    where name = 'Ingeniería en Sistemas' and active;
+    if institutional_career is null then
+      raise exception 'La carrera institucional no está configurada; aplica primero la migración 0009';
+    end if;
+
+    update public.students
+    set control_number = target_control_number, career_id = institutional_career
+    where id = target_user_id;
+    if not found then
+      raise exception 'No se encontró el registro de alumno creado por Auth';
+    end if;
+    delete from public.teachers where id = target_user_id;
+  else
+    if length(btrim(coalesce(target_employee_number, ''))) not between 2 and 40
+       or length(btrim(coalesce(target_department, ''))) not between 2 and 120 then
+      raise exception 'Los datos docentes no son válidos';
+    end if;
+
+    delete from public.students where id = target_user_id;
+    insert into public.teachers (id, employee_number, department)
+    values (target_user_id, btrim(target_employee_number), btrim(target_department))
+    on conflict (id) do update
+      set employee_number = excluded.employee_number,
+          department = excluded.department;
+  end if;
+
+  insert into public.activity_logs (user_id, action, module, record_id, description, details)
+  values (
+    target_admin_id,
+    'ADMIN_USER_CREATED',
+    'Usuarios',
+    target_user_id::text,
+    'Creó una cuenta institucional con contraseña temporal',
+    jsonb_build_object('role', target_role)
+  );
+end;
+$$;
+
+revoke all on function public.finalize_admin_created_user(uuid, uuid, text, text, text, text)
+  from public, anon, authenticated;
+grant execute on function public.finalize_admin_created_user(uuid, uuid, text, text, text, text)
+  to service_role;
+
+-- ===== 0011_institutional_temporary_password.sql =====
+-- Las altas gestionadas por administración asignan la contraseña temporal institucional
+-- (Tec12345!) y se auditan sin almacenar contraseñas ni secretos en texto plano.
+
+-- ===== 0012_backup_and_recovery_module.sql =====
+-- Configura el bucket institucional para almacenamiento seguro de respaldos
+-- de la base de datos de Banco Académico con políticas estrictas RLS que
+-- restringen el acceso exclusivamente a administradores activos.
+
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values (
+  'institutional-backups',
+  'institutional-backups',
+  false,
+  104857600,
+  array['application/zip', 'application/x-zip-compressed', 'application/octet-stream']
+)
+on conflict (id) do update set
+  public = false,
+  file_size_limit = 104857600,
+  allowed_mime_types = array['application/zip', 'application/x-zip-compressed', 'application/octet-stream'];
+
+drop policy if exists "institutional backups admin read" on storage.objects;
+create policy "institutional backups admin read" on storage.objects
+  for select to authenticated using (
+    bucket_id = 'institutional-backups' and
+    exists (
+      select 1 from public.profiles
+      where id = auth.uid() and role = 'administrador' and is_active = true
+    )
+  );
+
+drop policy if exists "institutional backups admin insert" on storage.objects;
+create policy "institutional backups admin insert" on storage.objects
+  for insert to authenticated with check (
+    bucket_id = 'institutional-backups' and
+    exists (
+      select 1 from public.profiles
+      where id = auth.uid() and role = 'administrador' and is_active = true
+    )
+  );
+
+drop policy if exists "institutional backups admin update" on storage.objects;
+create policy "institutional backups admin update" on storage.objects
+  for update to authenticated using (
+    bucket_id = 'institutional-backups' and
+    exists (
+      select 1 from public.profiles
+      where id = auth.uid() and role = 'administrador' and is_active = true
+    )
+  ) with check (
+    bucket_id = 'institutional-backups' and
+    exists (
+      select 1 from public.profiles
+      where id = auth.uid() and role = 'administrador' and is_active = true
+    )
+  );
+
+drop policy if exists "institutional backups admin delete" on storage.objects;
+create policy "institutional backups admin delete" on storage.objects
+  for delete to authenticated using (
+    bucket_id = 'institutional-backups' and
+    exists (
+      select 1 from public.profiles
+      where id = auth.uid() and role = 'administrador' and is_active = true
+    )
+  );
+
+
+
+-- Migration 0013: notificaciones y edición administrativa de usuarios
+-- Notificaciones para avisos y tareas académicas.
+alter table public.posts
+  add column if not exists post_type text not null default 'anuncio'
+  check (post_type in ('tarea', 'anuncio'));
+
+create table if not exists public.notificaciones (
+  id uuid primary key default gen_random_uuid(),
+  usuario_destino_id uuid not null references public.profiles(id) on delete cascade,
+  tipo text not null check (tipo in ('tarea', 'anuncio')),
+  titulo text not null,
+  mensaje text not null,
+  remitente_id uuid not null references public.profiles(id) on delete cascade,
+  remitente_nombre text not null default 'Comunidad académica',
+  remitente_rol public.app_role not null,
+  leida boolean not null default false,
+  fecha_creacion timestamptz not null default now(),
+  post_id uuid references public.posts(id) on delete cascade
+);
+
+create index if not exists notificaciones_destino_fecha_idx
+  on public.notificaciones(usuario_destino_id, fecha_creacion desc);
+create index if not exists notificaciones_destino_no_leidas_idx
+  on public.notificaciones(usuario_destino_id, leida) where leida = false;
+
+alter table public.notificaciones enable row level security;
+revoke all on public.notificaciones from anon, authenticated;
+grant select on public.notificaciones to authenticated;
+grant update (leida) on public.notificaciones to authenticated;
+drop policy if exists "users read own notifications" on public.notificaciones;
+create policy "users read own notifications" on public.notificaciones
+  for select to authenticated using (usuario_destino_id = auth.uid());
+drop policy if exists "users mark own notifications read" on public.notificaciones;
+create policy "users mark own notifications read" on public.notificaciones
+  for update to authenticated using (usuario_destino_id = auth.uid())
+  with check (usuario_destino_id = auth.uid());
+
+drop policy if exists "posts members read" on public.posts;
+create policy "posts members read" on public.posts for select to authenticated using (
+  deleted_at is null and (
+    public.is_admin()
+    or (group_id is null and public.current_role() = 'alumno')
+    or (group_id is not null and (public.is_teacher_of(group_id) or public.is_enrolled_in(group_id)))
+  )
+);
+
+create or replace function public.notify_post_recipients() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if new.group_id is not null then
+    insert into public.notificaciones(usuario_destino_id, tipo, titulo, mensaje, remitente_id, remitente_nombre, remitente_rol, post_id)
+    select distinct e.student_id, new.post_type, new.title, new.body, new.created_by,
+           trim(concat(sender.first_name, ' ', sender.last_name)), sender.role, new.id
+      from public.enrollments e
+      join public.profiles recipient on recipient.id = e.student_id and recipient.is_active = true
+      join public.profiles sender on sender.id = new.created_by
+     where e.group_id = new.group_id and e.status = 'active'
+       and e.student_id <> new.created_by;
+  else
+    -- Solo administración puede publicar una notificación institucional general.
+    if public.current_role() = 'administrador' then
+      insert into public.notificaciones(usuario_destino_id, tipo, titulo, mensaje, remitente_id, remitente_nombre, remitente_rol, post_id)
+      select p.id, new.post_type, new.title, new.body, new.created_by,
+             trim(concat(sender.first_name, ' ', sender.last_name)), sender.role, new.id
+        from public.profiles p
+        cross join public.profiles sender
+       where p.role = 'alumno' and p.is_active is distinct from false
+         and sender.id = new.created_by
+         and p.id <> new.created_by;
+    end if;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists posts_notify_recipients on public.posts;
+create trigger posts_notify_recipients after insert on public.posts
+for each row execute function public.notify_post_recipients();
+
+drop policy if exists "teachers publish to own groups" on public.posts;
+create policy "teachers publish to own groups" on public.posts
+  for insert to authenticated with check (
+    created_by = auth.uid() and (
+      (public.current_role() = 'docente' and group_id is not null and public.is_teacher_of(group_id))
+      or public.current_role() = 'administrador'
+    )
+  );
+
+revoke all on function public.notify_post_recipients() from public;
+
+create or replace function public.update_managed_profile(
+  target_user_id uuid,
+  target_first_name text,
+  target_last_name text,
+  target_email text,
+  target_role text,
+  target_control_number text,
+  target_employee_number text,
+  target_department text
+) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is null or public.current_role() <> 'administrador' then
+    raise exception 'Solo administración puede editar cuentas';
+  end if;
+  if target_user_id = auth.uid() then
+    raise exception 'No puedes cambiar los datos de acceso de tu propia cuenta desde este formulario';
+  end if;
+  if exists (select 1 from public.profiles where id = target_user_id and role = 'administrador') then
+    raise exception 'Las cuentas administradoras no se pueden editar desde este formulario';
+  end if;
+  if target_role not in ('alumno', 'docente') then
+    raise exception 'El rol indicado no está permitido';
+  end if;
+  if target_role = 'alumno' and length(trim(coalesce(target_control_number, ''))) < 2 then
+    raise exception 'El número de control es obligatorio';
+  end if;
+  if target_role = 'docente' and (length(trim(coalesce(target_employee_number, ''))) < 2 or length(trim(coalesce(target_department, ''))) < 2) then
+    raise exception 'El número de trabajador y departamento son obligatorios';
+  end if;
+
+  update public.profiles
+     set first_name = trim(target_first_name), last_name = trim(target_last_name),
+         email = lower(trim(target_email)), role = target_role::public.app_role, updated_at = now()
+   where id = target_user_id;
+  if not found then raise exception 'No se encontró la cuenta'; end if;
+
+  if target_role = 'alumno' then
+    insert into public.students(id, control_number) values(target_user_id, trim(target_control_number))
+    on conflict(id) do update set control_number = excluded.control_number;
+  else
+    insert into public.teachers(id, employee_number, department)
+    values(target_user_id, trim(target_employee_number), trim(target_department))
+    on conflict(id) do update set employee_number = excluded.employee_number, department = excluded.department;
+  end if;
+
+  insert into public.activity_logs(user_id, action, module, record_id, description)
+  values(auth.uid(), 'ADMIN_USER_UPDATED', 'Usuarios', target_user_id::text, 'Actualizó datos personales e institucionales');
+end;
+$$;
+
+revoke all on function public.update_managed_profile(uuid,text,text,text,text,text,text,text) from public, anon;
+grant execute on function public.update_managed_profile(uuid,text,text,text,text,text,text,text) to authenticated;
+
+
 COMMIT;
+
+-- PDF adjuntos para tareas/anuncios y mensajería directa entre cuentas activas.
+alter table public.posts add column if not exists attachment_path text;
+
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('academic-posts', 'academic-posts', false, 15728640, array['application/pdf'])
+on conflict (id) do update set
+  public = false,
+  file_size_limit = 15728640,
+  allowed_mime_types = array['application/pdf'];
+
+drop policy if exists "post authors upload pdf attachments" on storage.objects;
+create policy "post authors upload pdf attachments" on storage.objects
+  for insert to authenticated with check (
+    bucket_id = 'academic-posts'
+    and (storage.foldername(name))[1] = auth.uid()::text
+    and exists (
+      select 1 from public.profiles p
+       where p.id = auth.uid() and p.is_active = true
+         and p.role in ('alumno', 'docente', 'administrador')
+    )
+  );
+
+drop policy if exists "post members read pdf attachments" on storage.objects;
+create policy "post members read pdf attachments" on storage.objects
+  for select to authenticated using (
+    bucket_id = 'academic-posts'
+    and exists (
+      select 1 from public.posts p
+       where p.attachment_path = name and p.deleted_at is null
+         and (
+           public.is_admin()
+           or (p.group_id is null and public.current_role() = 'alumno')
+           or (p.group_id is not null and (public.is_teacher_of(p.group_id) or public.is_enrolled_in(p.group_id)))
+         )
+    )
+    and exists (select 1 from public.profiles active_user where active_user.id = auth.uid() and active_user.is_active = true)
+  );
+
+create or replace function public.post_pdf_is_unlinked(target_path text)
+returns boolean language sql stable security definer set search_path = public, pg_temp set row_security = off as $$
+  select not exists (select 1 from public.posts p where p.attachment_path = target_path)
+$$;
+revoke all on function public.post_pdf_is_unlinked(text) from public, anon;
+grant execute on function public.post_pdf_is_unlinked(text) to authenticated;
+
+drop policy if exists "authors delete unlinked post pdfs" on storage.objects;
+create policy "authors delete unlinked post pdfs" on storage.objects
+  for delete to authenticated using (
+    bucket_id = 'academic-posts'
+    and (storage.foldername(name))[1] = auth.uid()::text
+    and public.post_pdf_is_unlinked(name)
+  );
+
+drop policy if exists "teachers publish to own groups" on public.posts;
+create policy "teachers publish to own groups" on public.posts
+  for insert to authenticated with check (
+    created_by = auth.uid() and (
+      public.current_role() = 'administrador'
+      or (public.current_role() = 'docente' and group_id is not null and public.is_teacher_of(group_id))
+      or (public.current_role() = 'alumno' and group_id is not null and public.is_enrolled_in(group_id))
+    )
+    and exists (select 1 from public.profiles active_user where active_user.id = auth.uid() and active_user.is_active = true)
+  );
+
+create or replace function public.notify_post_recipients() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if new.group_id is not null then
+    insert into public.notificaciones(usuario_destino_id, tipo, titulo, mensaje, remitente_id, remitente_nombre, remitente_rol, post_id)
+    select distinct recipient.id, new.post_type, new.title, new.body, new.created_by,
+           trim(concat(sender.first_name, ' ', sender.last_name)), sender.role, new.id
+      from (
+        select e.student_id as user_id from public.enrollments e
+         where e.group_id = new.group_id and e.status = 'active'
+        union
+        select tg.teacher_id as user_id from public.teacher_groups tg
+         where tg.group_id = new.group_id
+      ) group_members
+      join public.profiles recipient on recipient.id = group_members.user_id and recipient.is_active = true
+      join public.profiles sender on sender.id = new.created_by
+     where recipient.id <> new.created_by;
+  elsif public.current_role() = 'administrador' then
+    insert into public.notificaciones(usuario_destino_id, tipo, titulo, mensaje, remitente_id, remitente_nombre, remitente_rol, post_id)
+    select p.id, new.post_type, new.title, new.body, new.created_by,
+           trim(concat(sender.first_name, ' ', sender.last_name)), sender.role, new.id
+      from public.profiles p
+      join public.profiles sender on sender.id = new.created_by
+     where p.role = 'alumno' and p.is_active = true and p.id <> new.created_by;
+  end if;
+  return new;
+end;
+$$;
+
+create table if not exists public.chat_conversations (
+  id uuid primary key default gen_random_uuid(),
+  direct_key text not null unique,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create table if not exists public.chat_participants (
+  conversation_id uuid not null references public.chat_conversations(id) on delete cascade,
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  joined_at timestamptz not null default now(),
+  primary key (conversation_id, user_id)
+);
+create table if not exists public.chat_messages (
+  id uuid primary key default gen_random_uuid(),
+  conversation_id uuid not null references public.chat_conversations(id) on delete cascade,
+  sender_id uuid not null references public.profiles(id) on delete cascade,
+  body text not null check (length(trim(body)) between 1 and 4000),
+  created_at timestamptz not null default now()
+);
+create index if not exists chat_messages_conversation_created_idx
+  on public.chat_messages(conversation_id, created_at desc);
+create index if not exists chat_participants_user_idx
+  on public.chat_participants(user_id, conversation_id);
+
+alter table public.chat_conversations enable row level security;
+alter table public.chat_participants enable row level security;
+alter table public.chat_messages enable row level security;
+revoke all on public.chat_conversations, public.chat_participants, public.chat_messages from anon, authenticated;
+grant select on public.chat_conversations, public.chat_participants, public.chat_messages to authenticated;
+grant insert (conversation_id, sender_id, body) on public.chat_messages to authenticated;
+
+create or replace function public.is_chat_participant(target_conversation uuid, target_user uuid)
+returns boolean language sql stable security definer set search_path = public, pg_temp set row_security = off as $$
+  select exists (
+    select 1 from public.chat_participants cp
+     where cp.conversation_id = target_conversation and cp.user_id = target_user
+  ) and exists (select 1 from public.profiles active_user where active_user.id = target_user and active_user.is_active = true)
+$$;
+revoke all on function public.is_chat_participant(uuid, uuid) from public, anon;
+grant execute on function public.is_chat_participant(uuid, uuid) to authenticated;
+
+drop policy if exists "chat members read conversations" on public.chat_conversations;
+create policy "chat members read conversations" on public.chat_conversations
+  for select to authenticated using (public.is_chat_participant(id, auth.uid()));
+drop policy if exists "users read their chat participants" on public.chat_participants;
+create policy "users read their chat participants" on public.chat_participants
+  for select to authenticated using (public.is_chat_participant(conversation_id, auth.uid()));
+drop policy if exists "chat members read messages" on public.chat_messages;
+create policy "chat members read messages" on public.chat_messages
+  for select to authenticated using (public.is_chat_participant(conversation_id, auth.uid()));
+drop policy if exists "chat members send own messages" on public.chat_messages;
+create policy "chat members send own messages" on public.chat_messages
+  for insert to authenticated with check (
+    sender_id = auth.uid()
+    and public.is_chat_participant(conversation_id, auth.uid())
+    and public.current_role() in ('alumno', 'docente', 'administrador')
+    and exists (select 1 from public.profiles active_user where active_user.id = auth.uid() and active_user.is_active = true)
+  );
+
+create or replace function public.list_chat_contacts()
+returns table (id uuid, full_name text, role public.app_role)
+language sql stable security definer set search_path = public, pg_temp set row_security = off as $$
+  select p.id, coalesce(nullif(trim(concat(p.first_name, ' ', p.last_name)), ''), 'Usuario académico'), p.role
+    from public.profiles p
+   where auth.uid() is not null and p.is_active = true and p.id <> auth.uid()
+     and exists (select 1 from public.profiles active_user where active_user.id = auth.uid() and active_user.is_active = true)
+     and p.role in ('alumno', 'docente', 'administrador')
+   order by p.role, p.first_name, p.last_name
+$$;
+revoke all on function public.list_chat_contacts() from public, anon;
+grant execute on function public.list_chat_contacts() to authenticated;
+
+drop function if exists public.list_my_chats();
+create or replace function public.list_my_chats()
+returns table (conversation_id uuid, contact_id uuid, full_name text, role public.app_role, updated_at timestamptz)
+language sql stable security definer set search_path = public, pg_temp set row_security = off as $$
+  select c.id, other_user.id,
+         coalesce(nullif(trim(concat(other_user.first_name, ' ', other_user.last_name)), ''), 'Usuario académico'),
+         other_user.role, c.updated_at
+    from public.chat_participants mine
+    join public.chat_conversations c on c.id = mine.conversation_id
+    join public.chat_participants theirs on theirs.conversation_id = mine.conversation_id and theirs.user_id <> auth.uid()
+    join public.profiles other_user on other_user.id = theirs.user_id and other_user.is_active = true
+   where auth.uid() is not null and mine.user_id = auth.uid()
+     and exists (select 1 from public.profiles active_user where active_user.id = auth.uid() and active_user.is_active = true)
+   order by c.updated_at desc
+$$;
+revoke all on function public.list_my_chats() from public, anon;
+grant execute on function public.list_my_chats() to authenticated;
+
+create or replace function public.start_direct_chat(target_user uuid)
+returns uuid language plpgsql security definer set search_path = public, pg_temp set row_security = off as $$
+declare
+  conversation uuid;
+  conversation_key text;
+begin
+  if auth.uid() is null or target_user = auth.uid() then
+    raise exception 'Selecciona otra cuenta para iniciar el chat';
+  end if;
+  if not exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_active = true)
+     or not exists (select 1 from public.profiles p where p.id = target_user and p.is_active = true and p.role in ('alumno', 'docente', 'administrador')) then
+    raise exception 'La cuenta seleccionada no está disponible';
+  end if;
+  conversation_key := least(auth.uid()::text, target_user::text) || ':' || greatest(auth.uid()::text, target_user::text);
+  insert into public.chat_conversations (direct_key) values (conversation_key)
+    on conflict (direct_key) do update set updated_at = public.chat_conversations.updated_at
+    returning id into conversation;
+  insert into public.chat_participants (conversation_id, user_id)
+    values (conversation, auth.uid()), (conversation, target_user) on conflict do nothing;
+  return conversation;
+end;
+$$;
+revoke all on function public.start_direct_chat(uuid) from public, anon;
+grant execute on function public.start_direct_chat(uuid) to authenticated;
+
+drop function if exists public.list_chat_messages(uuid);
+create or replace function public.list_chat_messages(target_conversation uuid)
+returns table (id uuid, conversation_id uuid, sender_id uuid, sender_name text, body text, created_at timestamptz)
+language sql stable security definer set search_path = public, pg_temp set row_security = off as $$
+  select m.id, m.conversation_id, m.sender_id,
+         coalesce(nullif(trim(concat(p.first_name, ' ', p.last_name)), ''), 'Usuario académico'),
+         m.body, m.created_at
+    from public.chat_messages m
+    join public.profiles p on p.id = m.sender_id
+   where auth.uid() is not null and m.conversation_id = target_conversation
+     and public.is_chat_participant(target_conversation, auth.uid())
+   order by m.created_at asc
+   limit 300
+$$;
+revoke all on function public.list_chat_messages(uuid) from public, anon;
+grant execute on function public.list_chat_messages(uuid) to authenticated;
+
+create or replace function public.touch_chat_conversation() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  update public.chat_conversations set updated_at = new.created_at where id = new.conversation_id;
+  return new;
+end;
+$$;
+drop trigger if exists chat_messages_touch_conversation on public.chat_messages;
+create trigger chat_messages_touch_conversation after insert on public.chat_messages
+for each row execute function public.touch_chat_conversation();
+revoke all on function public.touch_chat_conversation() from public, anon, authenticated;
+-- Grupos, multimedia privada y contador de mensajes sin leer.
+alter table public.chat_conversations
+  add column if not exists is_group boolean not null default false,
+  add column if not exists title text,
+  add column if not exists created_by uuid references public.profiles(id) on delete set null;
+alter table public.chat_participants
+  add column if not exists last_read_at timestamptz not null default now();
+alter table public.chat_messages
+  add column if not exists attachment_path text,
+  add column if not exists attachment_name text,
+  add column if not exists attachment_mime text,
+  add column if not exists attachment_size bigint;
+alter table public.chat_messages drop constraint if exists chat_messages_body_check;
+alter table public.chat_messages add constraint chat_messages_body_check
+  check (length(trim(body)) between 1 and 4000 or attachment_path is not null);
+alter table public.chat_messages drop constraint if exists chat_messages_attachment_metadata_check;
+alter table public.chat_messages add constraint chat_messages_attachment_metadata_check
+  check (
+    (attachment_path is null and attachment_name is null and attachment_mime is null and attachment_size is null)
+    or (attachment_path is not null and attachment_name is not null and attachment_mime is not null and attachment_size is not null and attachment_size between 1 and 26214400)
+  );
+create index if not exists chat_messages_unread_idx
+  on public.chat_messages(conversation_id, created_at desc, sender_id);
+
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values (
+  'chat-attachments', 'chat-attachments', false, 26214400,
+  array[
+    'application/pdf',
+    'image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/avif',
+    'audio/mpeg', 'audio/mp4', 'audio/ogg', 'audio/wav', 'audio/webm',
+    'video/mp4', 'video/webm', 'video/quicktime'
+  ]
+)
+on conflict (id) do update set
+  public = false,
+  file_size_limit = 26214400,
+  allowed_mime_types = excluded.allowed_mime_types;
+
+create or replace function public.is_chat_attachment_path(target_path text, target_user uuid)
+returns boolean language plpgsql stable security definer set search_path = public, storage, pg_temp set row_security = off as $$
+declare folders text[];
+begin
+  if target_path is null or target_user is null then return false; end if;
+  folders := storage.foldername(target_path);
+  if coalesce(array_length(folders, 1), 0) < 2
+     or folders[2] !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
+    return false;
+  end if;
+  return public.is_chat_participant(folders[2]::uuid, target_user);
+end;
+$$;
+revoke all on function public.is_chat_attachment_path(text, uuid) from public, anon;
+grant execute on function public.is_chat_attachment_path(text, uuid) to authenticated;
+
+create or replace function public.chat_attachment_is_unlinked(target_path text)
+returns boolean language sql stable security definer set search_path = public, pg_temp set row_security = off as $$
+  select not exists (select 1 from public.chat_messages m where m.attachment_path = target_path)
+$$;
+revoke all on function public.chat_attachment_is_unlinked(text) from public, anon;
+grant execute on function public.chat_attachment_is_unlinked(text) to authenticated;
+
+drop policy if exists "chat members upload own attachments" on storage.objects;
+create policy "chat members upload own attachments" on storage.objects
+  for insert to authenticated with check (
+    bucket_id = 'chat-attachments'
+    and (storage.foldername(name))[1] = auth.uid()::text
+    and public.is_chat_attachment_path(name, auth.uid())
+  );
+drop policy if exists "chat members read attachments" on storage.objects;
+create policy "chat members read attachments" on storage.objects
+  for select to authenticated using (
+    bucket_id = 'chat-attachments'
+    and public.is_chat_attachment_path(name, auth.uid())
+  );
+drop policy if exists "authors delete unlinked chat attachments" on storage.objects;
+create policy "authors delete unlinked chat attachments" on storage.objects
+  for delete to authenticated using (
+    bucket_id = 'chat-attachments'
+    and (storage.foldername(name))[1] = auth.uid()::text
+    and public.is_chat_attachment_path(name, auth.uid())
+    and public.chat_attachment_is_unlinked(name)
+  );
+
+drop policy if exists "chat members send own messages" on public.chat_messages;
+create policy "chat members send own messages" on public.chat_messages
+  for insert to authenticated with check (
+    sender_id = auth.uid()
+    and public.is_chat_participant(conversation_id, auth.uid())
+    and public.current_role() in ('alumno', 'docente', 'administrador')
+    and exists (select 1 from public.profiles active_user where active_user.id = auth.uid() and active_user.is_active = true)
+    and (
+      attachment_path is null
+      or (
+        attachment_path like auth.uid()::text || '/' || conversation_id::text || '/%'
+        and public.is_chat_attachment_path(attachment_path, auth.uid())
+      )
+    )
+  );
+grant insert (conversation_id, sender_id, body, attachment_path, attachment_name, attachment_mime, attachment_size)
+  on public.chat_messages to authenticated;
+
+create or replace function public.create_group_chat(target_users uuid[], target_title text)
+returns uuid language plpgsql security definer set search_path = public, pg_temp set row_security = off as $$
+declare
+  members uuid[];
+  valid_members integer;
+  new_conversation uuid;
+  clean_title text := trim(coalesce(target_title, ''));
+begin
+  if auth.uid() is null or not exists (
+    select 1 from public.profiles p where p.id = auth.uid() and p.is_active = true
+      and p.role in ('alumno', 'docente', 'administrador')
+  ) then raise exception 'La cuenta no puede iniciar grupos'; end if;
+  if length(clean_title) < 2 or length(clean_title) > 100 then
+    raise exception 'El nombre del grupo debe tener entre 2 y 100 caracteres';
+  end if;
+  select coalesce(array_agg(distinct member_id), '{}'::uuid[]) into members
+    from unnest(coalesce(target_users, '{}'::uuid[])) as requested(member_id)
+   where member_id is not null and member_id <> auth.uid();
+  if cardinality(members) < 2 or cardinality(members) > 49 then
+    raise exception 'Selecciona entre 2 y 49 personas para el grupo';
+  end if;
+  select count(*) into valid_members from public.profiles p
+   where p.id = any(members) and p.is_active = true
+     and p.role in ('alumno', 'docente', 'administrador');
+  if valid_members <> cardinality(members) then raise exception 'Una cuenta seleccionada no está disponible'; end if;
+
+  insert into public.chat_conversations (direct_key, is_group, title, created_by)
+  values ('group:' || gen_random_uuid()::text, true, clean_title, auth.uid())
+  returning id into new_conversation;
+  insert into public.chat_participants (conversation_id, user_id)
+  select new_conversation, member_id from unnest(array_append(members, auth.uid())) as participants(member_id);
+  return new_conversation;
+end;
+$$;
+revoke all on function public.create_group_chat(uuid[], text) from public, anon;
+grant execute on function public.create_group_chat(uuid[], text) to authenticated;
+
+drop function if exists public.list_my_chats();
+create function public.list_my_chats()
+returns table (
+  conversation_id uuid,
+  contact_id uuid,
+  full_name text,
+  role public.app_role,
+  is_group boolean,
+  member_count bigint,
+  unread_count bigint,
+  updated_at timestamptz
+)
+language sql stable security definer set search_path = public, pg_temp set row_security = off as $$
+  select c.id, other_user.id,
+         case when c.is_group then coalesce(c.title, 'Grupo de chat') else coalesce(other_user.full_name, 'Usuario académico') end,
+         other_user.role,
+         c.is_group,
+         (select count(*) from public.chat_participants cp join public.profiles p on p.id = cp.user_id and p.is_active = true where cp.conversation_id = c.id),
+         (select count(*) from public.chat_messages m where m.conversation_id = c.id and m.sender_id <> auth.uid() and m.created_at > mine.last_read_at),
+         c.updated_at
+    from public.chat_participants mine
+    join public.chat_conversations c on c.id = mine.conversation_id
+    left join lateral (
+      select p.id, p.role, coalesce(nullif(trim(concat(p.first_name, ' ', p.last_name)), ''), 'Usuario académico') as full_name
+        from public.chat_participants cp join public.profiles p on p.id = cp.user_id and p.is_active = true
+       where cp.conversation_id = c.id and cp.user_id <> auth.uid()
+       order by cp.joined_at, cp.user_id limit 1
+    ) other_user on true
+   where auth.uid() is not null and mine.user_id = auth.uid()
+     and exists (select 1 from public.profiles active_user where active_user.id = auth.uid() and active_user.is_active = true)
+   order by c.updated_at desc
+$$;
+revoke all on function public.list_my_chats() from public, anon;
+grant execute on function public.list_my_chats() to authenticated;
+
+drop function if exists public.list_chat_messages(uuid);
+create function public.list_chat_messages(target_conversation uuid)
+returns table (
+  id uuid,
+  conversation_id uuid,
+  sender_id uuid,
+  sender_name text,
+  body text,
+  created_at timestamptz,
+  attachment_name text,
+  attachment_mime text,
+  attachment_size bigint,
+  attachment_path text
+)
+language sql stable security definer set search_path = public, pg_temp set row_security = off as $$
+  select messages.id, messages.conversation_id, messages.sender_id, messages.sender_name,
+         messages.body, messages.created_at, messages.attachment_name, messages.attachment_mime,
+         messages.attachment_size, messages.attachment_path
+    from (
+      select m.id, m.conversation_id, m.sender_id,
+             coalesce(nullif(trim(concat(p.first_name, ' ', p.last_name)), ''), 'Usuario académico') as sender_name,
+             m.body, m.created_at, m.attachment_name, m.attachment_mime, m.attachment_size, m.attachment_path
+        from public.chat_messages m join public.profiles p on p.id = m.sender_id
+       where m.conversation_id = target_conversation
+         and public.is_chat_participant(target_conversation, auth.uid())
+       order by m.created_at desc limit 80
+    ) messages
+   order by messages.created_at asc
+$$;
+revoke all on function public.list_chat_messages(uuid) from public, anon;
+grant execute on function public.list_chat_messages(uuid) to authenticated;
+
+create or replace function public.mark_chat_read(target_conversation uuid)
+returns void language plpgsql security definer set search_path = public, pg_temp set row_security = off as $$
+begin
+  if auth.uid() is null or not public.is_chat_participant(target_conversation, auth.uid()) then
+    raise exception 'No tienes acceso a esta conversación';
+  end if;
+  update public.chat_participants set last_read_at = now()
+   where conversation_id = target_conversation and user_id = auth.uid();
+end;
+$$;
+revoke all on function public.mark_chat_read(uuid) from public, anon;
+grant execute on function public.mark_chat_read(uuid) to authenticated;
+
+create or replace function public.count_unread_chat_messages()
+returns bigint language sql stable security definer set search_path = public, pg_temp set row_security = off as $$
+  select count(*)
+    from public.chat_participants cp
+    join public.profiles p on p.id = cp.user_id and p.is_active = true
+    join public.chat_messages m on m.conversation_id = cp.conversation_id
+   where cp.user_id = auth.uid() and auth.uid() is not null
+     and m.sender_id <> auth.uid() and m.created_at > cp.last_read_at
+$$;
+revoke all on function public.count_unread_chat_messages() from public, anon;
+grant execute on function public.count_unread_chat_messages() to authenticated;
+
+-- ===== 0016_academic_administration_and_grade_capture.sql =====
+-- Keep student academic assignments under active administrator control.
+create or replace function public.guard_student_academic_profile()
+returns trigger
+language plpgsql
+set search_path = public, pg_temp
+as $$
+declare
+  institutional_career uuid;
+  trusted_writer boolean;
+begin
+  trusted_writer := public.is_admin() or coalesce(auth.role(), '') = 'service_role';
+
+  if tg_op = 'UPDATE' and not trusted_writer and auth.uid() is not null
+     and (new.career_id is distinct from old.career_id
+       or new.semester is distinct from old.semester
+       or new.specialty is distinct from old.specialty) then
+    raise exception 'Solo administración puede cambiar la carrera, el semestre o la especialidad';
+  end if;
+
+  if tg_op = 'INSERT' and not trusted_writer and auth.uid() is not null
+     and (new.career_id is not null or new.semester is not null or new.specialty is not null) then
+    raise exception 'Solo administración puede asignar datos académicos';
+  end if;
+
+  if new.career_id is null then
+    select id into institutional_career
+    from public.careers
+    where name = 'Ingeniería en Sistemas' and active;
+
+    if institutional_career is null then
+      raise exception 'La carrera institucional no está configurada';
+    end if;
+
+    new.career_id := institutional_career;
+  elsif not exists (
+    select 1 from public.careers where id = new.career_id and active
+  ) then
+    raise exception 'La carrera seleccionada no existe o está inactiva';
+  end if;
+
+  if new.semester is not null and new.semester not between 1 and 13 then
+    raise exception 'El semestre debe estar entre 1 y 13';
+  end if;
+
+  if new.specialty is not null
+     and new.specialty not in ('Ciberseguridad', 'Gestión de Servicios de TI') then
+    raise exception 'La especialidad no está permitida';
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists students_academic_profile_guard on public.students;
+create trigger students_academic_profile_guard
+  before insert or update of career_id, semester, specialty on public.students
+  for each row execute function public.guard_student_academic_profile();
+revoke all on function public.guard_student_academic_profile() from public, anon, authenticated;
+
+-- Retain the existing RPC signature for deployed clients, but never accept
+-- academic assignments from the student's own profile form.
+create or replace function public.save_student_academic_profile(
+  target_first_name text,
+  target_last_name text,
+  target_preferred_theme text,
+  target_avatar_path text,
+  target_semester smallint,
+  target_specialty text
+) returns void
+language plpgsql
+security invoker
+set search_path = public, pg_temp
+as $$
+begin
+  if auth.uid() is null or public.current_role() <> 'alumno' then
+    raise exception 'Solo un alumno autenticado puede actualizar su perfil';
+  end if;
+  if length(btrim(coalesce(target_first_name, ''))) not between 1 and 80
+     or length(btrim(coalesce(target_last_name, ''))) not between 1 and 100 then
+    raise exception 'El nombre o los apellidos no son válidos';
+  end if;
+  if target_preferred_theme not in ('light', 'dark') then
+    raise exception 'El tema visual no es válido';
+  end if;
+  if coalesce(target_avatar_path, '') <> ''
+     and split_part(target_avatar_path, '/', 1) <> auth.uid()::text then
+    raise exception 'La fotografía no pertenece a la cuenta';
+  end if;
+
+  update public.profiles
+  set first_name = btrim(target_first_name),
+      last_name = btrim(target_last_name),
+      preferred_theme = target_preferred_theme,
+      avatar_path = case when coalesce(target_avatar_path, '') = '' then avatar_path else target_avatar_path end,
+      updated_at = now()
+  where id = auth.uid();
+  if not found then
+    raise exception 'No se encontró el perfil de la cuenta';
+  end if;
+
+  if not exists (select 1 from public.students where id = auth.uid()) then
+    raise exception 'No se encontró el registro académico del alumno';
+  end if;
+
+  insert into public.activity_logs (user_id, action, module, description)
+  values (auth.uid(), 'Actualizó su perfil', 'Perfil', 'Datos personales y preferencias');
+end;
+$$;
+
+revoke all on function public.save_student_academic_profile(text, text, text, text, smallint, text)
+  from public, anon;
+grant execute on function public.save_student_academic_profile(text, text, text, text, smallint, text)
+  to authenticated;
+
+-- Admins can correct grades through the authenticated client while RLS continues
+-- to restrict teachers to groups assigned to them.
+drop policy if exists "administrators manage grades" on public.grades;
+create policy "administrators manage grades" on public.grades
+  for all to authenticated
+  using (public.is_admin())
+  with check (public.is_admin());
+
+do $$
+begin
+  if exists (
+    select 1
+    from pg_constraint
+    where conrelid = 'public.grades'::regclass
+      and conname = 'grades_recorded_by_fkey'
+      and confrelid <> 'public.profiles'::regclass
+  ) then
+    alter table public.grades drop constraint grades_recorded_by_fkey;
+  end if;
+
+  if not exists (
+    select 1
+    from pg_constraint
+    where conrelid = 'public.grades'::regclass
+      and conname = 'grades_recorded_by_fkey'
+      and confrelid = 'public.profiles'::regclass
+  ) then
+    alter table public.grades
+      add constraint grades_recorded_by_fkey
+      foreign key (recorded_by) references public.profiles(id) on delete set null;
+  end if;
+end;
+$$;
+
+create or replace function public.audit_grade_change()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  grade_row public.grades;
+  actor_id uuid;
+begin
+  if tg_op = 'DELETE' then
+    grade_row := old;
+  else
+    grade_row := new;
+  end if;
+  actor_id := coalesce(auth.uid(), grade_row.recorded_by);
+
+  insert into public.activity_logs (user_id, action, module, record_id, description, details)
+  values (
+    actor_id,
+    case tg_op when 'INSERT' then 'GRADE_CREATED' when 'UPDATE' then 'GRADE_UPDATED' else 'GRADE_DELETED' end,
+    'Calificaciones',
+    grade_row.id::text,
+    case tg_op
+      when 'INSERT' then 'Registró una calificación'
+      when 'UPDATE' then 'Actualizó una calificación'
+      else 'Eliminó una calificación'
+    end,
+    jsonb_build_object(
+      'enrollment_id', grade_row.enrollment_id,
+      'assessment', grade_row.assessment,
+      'previous_score', case when tg_op = 'INSERT' then null else old.score end,
+      'score', case when tg_op = 'DELETE' then null else new.score end
+    )
+  );
+
+  if tg_op = 'DELETE' then
+    return old;
+  end if;
+  return new;
+end;
+$$;
+
+revoke all on function public.audit_grade_change() from public, anon, authenticated;
+drop trigger if exists grades_audit_changes on public.grades;
+create trigger grades_audit_changes
+  after insert or update or delete on public.grades
+  for each row execute function public.audit_grade_change();
+-- ===== 0017_platform_activity_reporting.sql =====
+-- Track resource consultations from this migration forward; existing activity
+-- has no reliable view history to backfill.
+create table if not exists public.material_views (
+  id bigint generated always as identity primary key,
+  material_id uuid not null references public.materials(id) on delete cascade,
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  viewed_at timestamptz not null default now()
+);
+
+create index if not exists material_views_time_idx
+  on public.material_views(viewed_at desc);
+create index if not exists material_views_material_time_idx
+  on public.material_views(material_id, viewed_at desc);
+
+alter table public.material_views enable row level security;
+
+revoke all on public.material_views from public, anon;
+grant select, insert on public.material_views to authenticated;
+
+drop policy if exists "members log authorized material views" on public.material_views;
+create policy "members log authorized material views" on public.material_views
+  for insert to authenticated
+  with check (
+    user_id = auth.uid()
+    and exists (
+      select 1
+      from public.materials as material
+      where material.id = material_id
+        and material.status in ('Aprobado', 'Verificado')
+        and (
+          material.group_id is null
+          or public.is_enrolled_in(material.group_id)
+          or public.is_teacher_of(material.group_id)
+          or public.is_admin()
+        )
+    )
+  );
+
+drop policy if exists "admins and assigned teachers read material views" on public.material_views;
+create policy "admins and assigned teachers read material views" on public.material_views
+  for select to authenticated
+  using (
+    public.is_admin()
+    or exists (
+      select 1
+      from public.materials as material
+      where material.id = material_id
+        and (
+          material.created_by = auth.uid()
+          or (
+            material.group_id is not null
+            and public.is_teacher_of(material.group_id)
+          )
+        )
+    )
+  );
+
+drop policy if exists "assigned teachers read material downloads" on public.material_downloads;
+create policy "assigned teachers read material downloads" on public.material_downloads
+  for select to authenticated
+  using (
+    exists (
+      select 1
+      from public.materials as material
+      where material.id = material_downloads.material_id
+        and (
+          material.created_by = auth.uid()
+          or (
+            material.group_id is not null
+            and public.is_teacher_of(material.group_id)
+          )
+        )
+    )
+  );
+
+-- ===== 0018_administrator_management.sql =====
+create or replace function public.finalize_admin_created_administrator(
+  target_user_id uuid,
+  target_admin_id uuid
+) returns void
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if coalesce(auth.role(), '') <> 'service_role' then
+    raise exception 'Esta operación requiere el servicio administrativo seguro';
+  end if;
+  if not exists (
+    select 1
+    from public.profiles
+    where id = target_admin_id
+      and role = 'administrador'
+      and is_active
+  ) then
+    raise exception 'La cuenta administradora ya no está activa';
+  end if;
+
+  perform pg_advisory_xact_lock(17462, 1);
+
+  update public.profiles
+  set role = 'administrador', updated_at = now()
+  where id = target_user_id
+    and is_active
+    and role = 'alumno';
+  if not found then
+    raise exception 'No se encontró el perfil nuevo o no tiene un rol inicial válido';
+  end if;
+
+  delete from public.students where id = target_user_id;
+  delete from public.teachers where id = target_user_id;
+
+  insert into public.activity_logs (user_id, action, module, record_id, description)
+  values (
+    target_admin_id,
+    'ADMINISTRATOR_CREATED',
+    'Administradores',
+    target_user_id::text,
+    'Creó una cuenta administradora'
+  );
+end;
+$$;
+
+revoke all on function public.finalize_admin_created_administrator(uuid, uuid)
+  from public, anon, authenticated;
+grant execute on function public.finalize_admin_created_administrator(uuid, uuid)
+  to service_role;
+
+create or replace function public.update_managed_administrator(
+  target_user_id uuid,
+  target_first_name text,
+  target_last_name text,
+  target_email text
+) returns void
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if auth.uid() is null or public.current_role() is distinct from 'administrador' then
+    raise exception 'Solo un administrador activo puede editar administradores';
+  end if;
+  if target_user_id = auth.uid() then
+    raise exception 'No puedes editar tu propia cuenta desde esta sección';
+  end if;
+  if length(btrim(coalesce(target_first_name, ''))) not between 1 and 80
+     or length(btrim(coalesce(target_last_name, ''))) not between 1 and 100
+     or length(btrim(coalesce(target_email, ''))) not between 3 and 254
+     or position('@' in target_email) < 2 then
+    raise exception 'Los datos del administrador no son válidos';
+  end if;
+
+  update public.profiles
+  set first_name = btrim(target_first_name),
+      last_name = btrim(target_last_name),
+      email = lower(btrim(target_email)),
+      updated_at = now()
+  where id = target_user_id
+    and role = 'administrador';
+  if not found then
+    raise exception 'No se encontró la cuenta administradora';
+  end if;
+
+  insert into public.activity_logs (user_id, action, module, record_id, description)
+  values (
+    auth.uid(),
+    'ADMINISTRATOR_UPDATED',
+    'Administradores',
+    target_user_id::text,
+    'Actualizó los datos de una cuenta administradora'
+  );
+end;
+$$;
+
+revoke all on function public.update_managed_administrator(uuid, text, text, text)
+  from public, anon;
+grant execute on function public.update_managed_administrator(uuid, text, text, text)
+  to authenticated;
