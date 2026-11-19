@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { createClient, createServiceRoleClient, hasSupabaseServiceRoleConfig } from "@/lib/supabase/server";
+import { createClient, createPasswordVerificationClient, createServiceRoleClient, hasSupabaseConfig, hasSupabaseServiceRoleConfig } from "@/lib/supabase/server";
 import { TEMPORARY_PASSWORD } from "@/lib/constants";
 
 type AdminActionResult = { ok: true } | { ok: false; error: string };
@@ -27,7 +27,7 @@ const accountSchema = z.object({
   }
 });
 
-async function getActiveAdministrator(): Promise<{ actorId: string } | AdminActionResult> {
+async function getActiveAdministrator(): Promise<{ actorId: string; email: string | null } | AdminActionResult> {
   const supabase = await createClient();
   const { data: { user }, error: userError } = await supabase.auth.getUser();
   if (userError || !user) {
@@ -50,7 +50,39 @@ async function getActiveAdministrator(): Promise<{ actorId: string } | AdminActi
   if (user.app_metadata?.must_change_password === true || user.user_metadata?.must_change_password === true) {
     return { ok: false, error: "Debes cambiar tu contraseña temporal antes de gestionar cuentas." };
   }
-  return { actorId: user.id };
+  return { actorId: user.id, email: user.email ?? null };
+}
+
+async function verifyAdministratorPassword(
+  administrator: { actorId: string; email: string | null },
+  password: string,
+): Promise<AdminActionResult | null> {
+  if (!hasSupabaseConfig() || !administrator.email) {
+    console.error("Could not verify an administrator password because Supabase Auth is not configured for password authentication.");
+    return { ok: false, error: "No se pudo comprobar tu contraseña. Contacta al responsable técnico." };
+  }
+
+  const verifier = createPasswordVerificationClient();
+  const { data, error } = await verifier.auth.signInWithPassword({
+    email: administrator.email,
+    password,
+  });
+  if (error) {
+    if (error.code !== "invalid_credentials") {
+      console.error("Could not reauthenticate an administrator for a privileged account change.", error);
+    }
+    return {
+      ok: false,
+      error: error.code === "invalid_credentials"
+        ? "La contraseña actual no es correcta."
+        : "No se pudo comprobar tu contraseña. Intenta de nuevo.",
+    };
+  }
+  if (data.user?.id !== administrator.actorId) {
+    console.error("Administrator password verification resolved to a different account.");
+    return { ok: false, error: "No se pudo comprobar tu identidad. Inicia sesión de nuevo." };
+  }
+  return null;
 }
 
 export async function createManagedUser(formData: FormData): Promise<AdminActionResult> {
@@ -194,7 +226,155 @@ export async function updateManagedUser(formData: FormData): Promise<AdminAction
   return { ok: true };
 }
 
-export async function deactivateManagedUser(userId: string): Promise<AdminActionResult> {
+async function getReauthenticatedAdministrator(password: string) {
+  const administrator = await getActiveAdministrator();
+  if ("ok" in administrator) return administrator;
+  const verificationError = await verifyAdministratorPassword(administrator, password);
+  return verificationError ?? administrator;
+}
+
+export async function createManagedAdministrator(formData: FormData): Promise<AdminActionResult> {
+  const parsed = z.object({
+    firstName: z.string().trim().min(1).max(80),
+    lastName: z.string().trim().min(1).max(100),
+    email: z.string().trim().email().max(254).transform((value) => value.toLowerCase()),
+    currentPassword: z.string().min(1).max(256),
+  }).strict().safeParse(Object.fromEntries(formData));
+  if (!parsed.success) return { ok: false, error: "Revisa nombre, apellidos, correo y contraseña actual." };
+
+  const administrator = await getReauthenticatedAdministrator(parsed.data.currentPassword);
+  if ("ok" in administrator) return administrator;
+  if (!hasSupabaseServiceRoleConfig()) {
+    console.error("Cannot create an administrator: service-role configuration is missing.");
+    return { ok: false, error: "El alta requiere configuración administrativa del servidor." };
+  }
+
+  const service = createServiceRoleClient();
+  const { data: created, error: createError } = await service.auth.admin.createUser({
+    email: parsed.data.email,
+    password: TEMPORARY_PASSWORD,
+    email_confirm: true,
+    user_metadata: {
+      first_name: parsed.data.firstName,
+      last_name: parsed.data.lastName,
+      must_change_password: true,
+    },
+    app_metadata: {
+      must_change_password: true,
+    },
+  });
+  const createdUser = created?.user;
+  if (createError || !createdUser) {
+    if (createError) console.error("Could not create an administrator account.", createError);
+    return {
+      ok: false,
+      error: createError?.code === "email_exists" || createError?.code === "user_already_exists"
+        ? "Ya existe una cuenta con ese correo."
+        : "No se pudo crear la cuenta administradora. Revisa Supabase Auth y vuelve a intentar.",
+    };
+  }
+
+  const { error: finalizeError } = await service.rpc("finalize_admin_created_administrator", {
+    target_user_id: createdUser.id,
+    target_admin_id: administrator.actorId,
+  });
+  if (finalizeError) {
+    console.error("Could not finish provisioning an administrator account.", finalizeError);
+    const { error: cleanupError } = await service.auth.admin.deleteUser(createdUser.id);
+    if (cleanupError) console.error("Could not remove the incomplete administrator account.", cleanupError);
+    return { ok: false, error: "No se pudo completar el alta. Verifica que esté aplicada la migración 0018." };
+  }
+
+  revalidatePath("/admin/administradores");
+  revalidatePath("/admin/usuarios");
+  return { ok: true };
+}
+
+export async function updateManagedAdministrator(formData: FormData): Promise<AdminActionResult> {
+  const parsed = z.object({
+    userId: z.string().uuid(),
+    firstName: z.string().trim().min(1).max(80),
+    lastName: z.string().trim().min(1).max(100),
+    email: z.string().trim().email().max(254).transform((value) => value.toLowerCase()),
+    currentPassword: z.string().min(1).max(256),
+  }).strict().safeParse(Object.fromEntries(formData));
+  if (!parsed.success) return { ok: false, error: "Revisa nombre, apellidos, correo y contraseña actual." };
+
+  const administrator = await getReauthenticatedAdministrator(parsed.data.currentPassword);
+  if ("ok" in administrator) return administrator;
+  if (parsed.data.userId === administrator.actorId) {
+    return { ok: false, error: "No puedes editar tu propia cuenta desde esta sección." };
+  }
+
+  const session = await createClient();
+  const { data: targetProfile, error: targetError } = await session
+    .from("profiles")
+    .select("role")
+    .eq("id", parsed.data.userId)
+    .maybeSingle();
+  if (targetError) {
+    console.error("Could not verify the administrator account selected for editing.", targetError);
+    return { ok: false, error: "No se pudo validar la cuenta seleccionada." };
+  }
+  if (targetProfile?.role !== "administrador") {
+    return { ok: false, error: "La cuenta seleccionada no es de administrador." };
+  }
+  if (!hasSupabaseServiceRoleConfig()) {
+    console.error("Cannot edit an administrator: service-role configuration is missing.");
+    return { ok: false, error: "La edición requiere configuración administrativa del servidor." };
+  }
+
+  const service = createServiceRoleClient();
+  const { data: existing, error: lookupError } = await service.auth.admin.getUserById(parsed.data.userId);
+  if (lookupError || !existing.user) {
+    if (lookupError) console.error("Could not load the administrator authentication record.", lookupError);
+    return { ok: false, error: "No se encontró la cuenta seleccionada en Supabase Auth." };
+  }
+  const oldUser = existing.user;
+  const { error: authError } = await service.auth.admin.updateUserById(parsed.data.userId, {
+    email: parsed.data.email,
+    email_confirm: true,
+    user_metadata: {
+      ...oldUser.user_metadata,
+      first_name: parsed.data.firstName,
+      last_name: parsed.data.lastName,
+    },
+  });
+  if (authError) {
+    console.error("Could not update administrator authentication details.", authError);
+    return {
+      ok: false,
+      error: authError.code === "email_exists" ? "Ya existe una cuenta con ese correo." : "No se pudieron actualizar los datos de acceso.",
+    };
+  }
+
+  const { error: profileError } = await session.rpc("update_managed_administrator", {
+    target_user_id: parsed.data.userId,
+    target_first_name: parsed.data.firstName,
+    target_last_name: parsed.data.lastName,
+    target_email: parsed.data.email,
+  });
+  if (profileError) {
+    const { error: rollbackError } = await service.auth.admin.updateUserById(parsed.data.userId, {
+      email: oldUser.email,
+      email_confirm: true,
+      user_metadata: oldUser.user_metadata,
+    });
+    if (rollbackError) console.error("Could not restore administrator authentication details after an edit failed.", rollbackError);
+    const duplicate = profileError.code === "23505" || profileError.message.includes("duplicate key");
+    if (!duplicate) console.error("Could not update an administrator profile.", profileError);
+    return {
+      ok: false,
+      error: duplicate ? "El correo ya está asignado a otra cuenta." : "No se pudieron guardar los cambios. Verifica que esté aplicada la migración 0018.",
+    };
+  }
+
+  revalidatePath("/admin/administradores");
+  revalidatePath("/admin/usuarios");
+  return { ok: true };
+}
+
+async function deactivateManagedUserRecord(userId: string, allowAdministrator: boolean): Promise<AdminActionResult> {
   if (!z.string().uuid().safeParse(userId).success) {
     return { ok: false, error: "La cuenta seleccionada no es válida." };
   }
@@ -202,6 +382,19 @@ export async function deactivateManagedUser(userId: string): Promise<AdminAction
   const administrator = await getActiveAdministrator();
   if ("ok" in administrator) return administrator;
   const supabase = await createClient();
+  const { data: target, error: targetError } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("id", userId)
+    .maybeSingle();
+  if (targetError) {
+    console.error("Could not verify the account role before deactivation.", targetError);
+    return { ok: false, error: "No se pudo validar la cuenta seleccionada." };
+  }
+  if (!target) return { ok: false, error: "No se encontró la cuenta seleccionada." };
+  if (target.role === "administrador" && !allowAdministrator) {
+    return { ok: false, error: "Las cuentas administradoras solo se pueden desactivar desde su sección con contraseña." };
+  }
   const { error } = await supabase.rpc("deactivate_managed_user", { target_user_id: userId });
   if (error) {
     const allowedMessages = [
@@ -221,6 +414,7 @@ export async function deactivateManagedUser(userId: string): Promise<AdminAction
   if (!hasSupabaseServiceRoleConfig()) {
     console.error("A managed account was disabled in the app, but the service-role key is unavailable to revoke existing Supabase sessions.");
     revalidatePath("/admin/usuarios");
+    revalidatePath("/admin/administradores");
     revalidatePath("/admin/alumnos");
     revalidatePath("/admin/docentes");
     return { ok: false, error: "El acceso al portal se desactivó y el historial se conservó, pero falta configuración del servidor para revocar sus sesiones de Supabase." };
@@ -231,24 +425,55 @@ export async function deactivateManagedUser(userId: string): Promise<AdminAction
   if (banError) {
     console.error("The portal account was disabled, but Supabase could not revoke its active sessions.", banError);
     revalidatePath("/admin/usuarios");
+    revalidatePath("/admin/administradores");
     revalidatePath("/admin/alumnos");
     revalidatePath("/admin/docentes");
     return { ok: false, error: "El acceso al portal se desactivó, pero Supabase no pudo revocar las sesiones activas. Contacta al responsable técnico." };
   }
 
   revalidatePath("/admin/usuarios");
+  revalidatePath("/admin/administradores");
   revalidatePath("/admin/alumnos");
   revalidatePath("/admin/docentes");
   return { ok: true };
 }
 
-export async function reactivateManagedUser(userId: string): Promise<AdminActionResult> {
+export async function deactivateManagedUser(userId: string): Promise<AdminActionResult> {
+  return deactivateManagedUserRecord(userId, false);
+}
+
+export async function deactivateManagedAdministrator(formData: FormData): Promise<AdminActionResult> {
+  const parsed = z.object({
+    userId: z.string().uuid(),
+    currentPassword: z.string().min(1).max(256),
+  }).strict().safeParse(Object.fromEntries(formData));
+  if (!parsed.success) return { ok: false, error: "Escribe tu contraseña actual para confirmar la baja." };
+  const administrator = await getReauthenticatedAdministrator(parsed.data.currentPassword);
+  if ("ok" in administrator) return administrator;
+  return deactivateManagedUserRecord(parsed.data.userId, true);
+}
+
+async function reactivateManagedUserRecord(userId: string, allowAdministrator: boolean): Promise<AdminActionResult> {
   if (!z.string().uuid().safeParse(userId).success) {
     return { ok: false, error: "La cuenta seleccionada no es válida." };
   }
 
   const administrator = await getActiveAdministrator();
   if ("ok" in administrator) return administrator;
+  const supabase = await createClient();
+  const { data: target, error: targetError } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("id", userId)
+    .maybeSingle();
+  if (targetError) {
+    console.error("Could not verify the account role before reactivation.", targetError);
+    return { ok: false, error: "No se pudo validar la cuenta seleccionada." };
+  }
+  if (!target) return { ok: false, error: "No se encontró la cuenta seleccionada." };
+  if (target.role === "administrador" && !allowAdministrator) {
+    return { ok: false, error: "Las cuentas administradoras solo se pueden reactivar desde su sección con contraseña." };
+  }
   if (!hasSupabaseServiceRoleConfig()) {
     console.error("Cannot reactivate a managed user: service-role configuration is missing.");
     return { ok: false, error: "La reactivación requiere configuración administrativa del servidor. Contacta al responsable técnico." };
@@ -261,7 +486,6 @@ export async function reactivateManagedUser(userId: string): Promise<AdminAction
     return { ok: false, error: "No se pudo restablecer el acceso de autenticación. Intenta de nuevo." };
   }
 
-  const supabase = await createClient();
   const { error } = await supabase.rpc("reactivate_managed_user", { target_user_id: userId });
   if (error) {
     console.error("Could not reactivate a managed account in the academic portal.", error);
@@ -269,9 +493,25 @@ export async function reactivateManagedUser(userId: string): Promise<AdminAction
   }
 
   revalidatePath("/admin/usuarios");
+  revalidatePath("/admin/administradores");
   revalidatePath("/admin/alumnos");
   revalidatePath("/admin/docentes");
   return { ok: true };
+}
+
+export async function reactivateManagedUser(userId: string): Promise<AdminActionResult> {
+  return reactivateManagedUserRecord(userId, false);
+}
+
+export async function reactivateManagedAdministrator(formData: FormData): Promise<AdminActionResult> {
+  const parsed = z.object({
+    userId: z.string().uuid(),
+    currentPassword: z.string().min(1).max(256),
+  }).strict().safeParse(Object.fromEntries(formData));
+  if (!parsed.success) return { ok: false, error: "Escribe tu contraseña actual para confirmar la reactivación." };
+  const administrator = await getReauthenticatedAdministrator(parsed.data.currentPassword);
+  if ("ok" in administrator) return administrator;
+  return reactivateManagedUserRecord(parsed.data.userId, true);
 }
 
 const activeValue = z.enum(["true", "false"]).transform((value) => value === "true");
